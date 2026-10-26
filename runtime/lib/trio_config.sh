@@ -10,21 +10,34 @@ trio_cargar_config() {
     TRIO_GIT_NAME=""
     TRIO_GIT_EMAIL=""
 
-    config_file="${PJ_TRIO_CONFIG:-${TRIO_SHARE_DIR}/trio.conf}"
-
-    if [[ ! -f "$config_file" ]]; then
-        if [[ -f "${project_dir}/.trio/trio.conf" ]]; then
-            config_file="${project_dir}/.trio/trio.conf"
-        elif [[ -f "${TRIO_ROOT}/trio.conf.example" ]]; then
-            config_file="${TRIO_ROOT}/trio.conf.example"
-        elif [[ -f "${project_dir}/scripts/trio.conf.example" ]]; then
-            config_file="${project_dir}/scripts/trio.conf.example"
-        fi
+    # Capas (la última gana): defaults del sistema → override en /zt → repo.
+    # PJ_TRIO_CONFIG, si está, reemplaza todas las capas. Nada en $HOME.
+    trio_config_capas=()
+    if [[ -n "${PJ_TRIO_CONFIG:-}" ]]; then
+        trio_config_capas=("$PJ_TRIO_CONFIG")
+    else
+        local defaults=""
+        for c in "${TRIO_SHARE_DIR}/trio.conf" "${TRIO_ROOT}/trio.conf.example" "${TRIO_SHARE_DIR}/trio.conf.example"; do
+            if [[ -f "$c" ]]; then
+                defaults="$c"
+                break
+            fi
+        done
+        [[ -n "$defaults" ]] && trio_config_capas+=("$defaults")
+        [[ -f "${TRIO_OVERRIDE_DIR}/trio.conf" ]] && trio_config_capas+=("${TRIO_OVERRIDE_DIR}/trio.conf")
+        [[ -f "${project_dir}/.trio/trio.conf" ]] && trio_config_capas+=("${project_dir}/.trio/trio.conf")
     fi
 
-    if [[ -f "$config_file" ]]; then
-        # shellcheck source=/dev/null
-        source "$config_file"
+    local f
+    for f in "${trio_config_capas[@]}"; do
+        if [[ -f "$f" ]]; then
+            # shellcheck source=/dev/null
+            source "$f"
+        fi
+    done
+    config_file=""
+    if ((${#trio_config_capas[@]})); then
+        config_file="${trio_config_capas[*]}"
     fi
 }
 

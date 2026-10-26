@@ -13,7 +13,7 @@ trio_resolver_proyecto() {
         if [[ -n "${PJ_TRIO_ROOT:-}" ]]; then
             candidates+=("${PJ_TRIO_ROOT}")
         fi
-        candidates+=("$(dirname "$PWD")" "${HOME}/.cache/ravn-piloto")
+        candidates+=("$(dirname "$PWD")" "/z-drive/tries")
         for c in "${candidates[@]}"; do
             if [[ -d "${c}/${proyecto_arg}" ]]; then
                 project_dir="$(cd "${c}/${proyecto_arg}" && pwd)"
@@ -24,7 +24,7 @@ trio_resolver_proyecto() {
 
     if [[ -z "$project_dir" ]]; then
         print_error "no se encontró el directorio del proyecto '$proyecto_arg'" >&2
-        print_info "Pista: podés pasar una ruta existente o configurar \$PJ_TRIO_ROOT (por defecto busca en el directorio padre de \$PWD o ~/.cache/ravn-piloto)." >&2
+        print_info "Pista: podés pasar una ruta existente o configurar \$PJ_TRIO_ROOT (por defecto busca en el directorio padre de \$PWD o /z-drive/tries)." >&2
         exit 1
     fi
 

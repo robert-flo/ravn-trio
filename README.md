@@ -32,6 +32,14 @@ Requiere `herdr` ≥ 0.9.5, `jq`, `git` y `notify-send` (libnotify).
 
 Instalado: todo bajo `/usr/share/ravn/trio/` y `/usr/bin/pj-trio` → symlink al launcher.
 
+## Configuración
+
+`trio.conf` se lee por capas y la última gana: defaults (`/usr/share/ravn/trio/trio.conf`, si no `trio.conf.example`) → override de la máquina en `/zt/ravn/trio/trio.conf` (`TRIO_OVERRIDE_DIR`) → repo (`<proyecto>/.trio/trio.conf`). `PJ_TRIO_CONFIG` reemplaza todas las capas. Nada en `$HOME`.
+
+## Plugin de herdr
+
+`herdr-plugin.toml` declara la acción **New trio** (`ravn.trio.new-trio`) y un link handler para URLs de issues de GitHub. La acción toma el ticket de la URL clicada o del número seleccionado y el proyecto del worktree o cwd del panel, y corre `pj-trio`. Para enlazarlo: `herdr plugin link /usr/share/ravn/trio` (o el checkout).
+
 ## `pj-trio`
 
 `pj-trio` es un inicializador idempotente para herdr que prepara un workspace con tres tabs dedicados e independientes a pantalla completa para los roles del trío: **PM**, **WK** y **RV**.
@@ -42,7 +50,7 @@ Instalado: todo bajo `/usr/share/ravn/trio/` y `/usr/bin/pj-trio` → symlink al
 pj-trio [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>]
 ```
 
-- `<proyecto>`: Ruta al checkout git del proyecto meta (`pj-*`) o nombre del directorio. Si pasás únicamente el nombre, se resuelve contra la variable de entorno `$PJ_TRIO_ROOT`, o por defecto contra el directorio padre de `$PWD` o `~/.cache/ravn-piloto`.
+- `<proyecto>`: Ruta al checkout git del proyecto meta (`pj-*`) o nombre del directorio. Si pasás únicamente el nombre, se resuelve contra la variable de entorno `$PJ_TRIO_ROOT`, o por defecto contra el directorio padre de `$PWD` o `/z-drive/tries`.
 - `<ticket>`: Identificador del issue o ticket a trabajar (por ejemplo `18` o `999`).
 - `--repo <miembro>`: Repositorio miembro opcional (hermano del proyecto meta, subdirectorio o ruta absoluta). Se añade al espacio de trabajo del agente mediante `--add-dir`.
 - `--dry-run`: Muestra los comandos y la topología sin aplicarlos.

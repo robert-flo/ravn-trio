@@ -1,0 +1,22 @@
+# Manifiesto de plugin de herdr (https://herdr.dev/docs/plugins/).
+# Instalado: /usr/share/ravn/trio/herdr-plugin.toml; se enlaza con
+# `herdr plugin link /usr/share/ravn/trio` o desde el checkout.
+id = "ravn.trio"
+name = "ravn-trio"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Trío PM/WK/RV en tabs de herdr (pj-trio)"
+platforms = ["linux"]
+
+[[actions]]
+id = "new-trio"
+title = "New trio"
+description = "Abre el trío del ticket (URL de issue clicada o número seleccionado) en el proyecto del panel"
+contexts = ["workspace", "pane", "selection"]
+command = ["runtime/plugin/new-trio"]
+
+[[link_handlers]]
+id = "github-issue"
+title = "New trio para este issue"
+pattern = "^https://github\\.com/[^/]+/[^/]+/issues/[0-9]+$"
+action = "new-trio"
