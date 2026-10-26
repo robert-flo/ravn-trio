@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# trio-status — alias de `pj-trio status` (lo usa el PM desde su prompt).
+set -Eeuo pipefail
+exec "$(dirname "$(realpath "$0")")/runtime/scripts/status" "$@"

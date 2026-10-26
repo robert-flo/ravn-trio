@@ -1,0 +1,5 @@
+# canonical	aliases	label	description	icon	menu	options
+start	s --start -s	Start trio	Create or reuse the herdr workspace with PM, WK and RV for a ticket.		1	-h --help
+kickoff	k --kickoff -k	Print PM kickoff	Render the PM kickoff prompt for a ticket (same as start --print-kickoff).		1	-h --help
+status	st --status	Write status.json	Write .trio/<ticket>/status.json and optionally notify-send.		1	-h --help
+help	h --help -h	Help and usage	Show this guide.	󰋖	1	-h --help

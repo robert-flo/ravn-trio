@@ -1,0 +1,21 @@
+# trio.conf.example — Configuración de kinds por rol para el trío
+#
+# Copiá este archivo a /usr/share/ravn/trio/trio.conf o apuntá la variable de entorno
+# PJ_TRIO_CONFIG a la ruta de tu archivo personalizado.
+#
+# Cada variable define el kind de agente a arrancar en el panel de dicho rol.
+# Dejá el valor vacío ("") si querés que el rol quede en un shell interactivo para
+# inicio manual.
+
+PM_KIND="agy"
+WK_KIND="agy"
+RV_KIND="agy"
+
+# Identidad git que pj-trio fija con `git config` local en el meta-repo y en el
+# miembro (los worktrees la heredan). El PM no la toca a mano.
+TRIO_GIT_NAME="Roberto Flores"
+TRIO_GIT_EMAIL="25asab015@ujmd.edu.sv"
+
+# Target de `herdr integration install` para el kind agy (ver `herdr integration
+# status`). Vacío = se usa el nombre del kind tal cual.
+TRIO_HERDR_INTEGRATION_AGY="antigravity-cli"

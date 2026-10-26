@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+
+# Status command module: escribe <proyecto>/.trio/<ticket>/status.json y, si se pide, avisa con notify-send.
+set -Eeuo pipefail
+
+module_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091 # Resolved from the project root.
+source "$module_dir/../helper/set_variable.sh"
+# shellcheck disable=SC1091
+source "$TRIO_RUNTIME_DIR/lib/presentation.sh"
+
+show_status_help() {
+  print_section "Trio Status Usage"
+  cat << 'HELP_EOF'
+  Uso: trio-status [--dry-run] [--notify] [--cola-de <agente>] [--error <texto>]
+                   [--pr <url>] [--head <sha>] <trio_dir> <estado> <paso>
+
+  Esquema de status.json (las claves no indicadas se conservan del archivo previo):
+    ticket     id del ticket (nombre de <trio_dir>)
+    estado     en-curso | hecho | needs-roberto
+    paso       plan | wk | rv | merge | cierre
+    error      motivo del fallo ("" si no hay)
+    intentos   intentos hechos en el paso actual (1 o 2)
+    timestamp  ISO 8601 con zona
+    pr, head   PR y sha en juego (opcionales)
+    cola       últimas líneas del panel del agente que falló (opcional)
+HELP_EOF
+}
+
+dry_run=0
+notify=0
+cola_de=""
+error=""
+pr=""
+head=""
+intentos=""
+pos=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) dry_run=1; shift ;;
+        --notify) notify=1; shift ;;
+        --cola-de) cola_de="${2:?}"; shift 2 ;;
+        --error) error="${2:?}"; shift 2 ;;
+        --pr) pr="${2:?}"; shift 2 ;;
+        --head) head="${2:?}"; shift 2 ;;
+        --intentos) intentos="${2:?}"; shift 2 ;;
+        -h|--help) show_status_help; exit 0 ;;
+        *) pos+=("$1"); shift ;;
+    esac
+done
+[[ ${#pos[@]} -eq 3 ]] || { print_error "se requieren <trio_dir> <estado> <paso>." >&2; exit 1; }
+trio_dir="${pos[0]}"; estado="${pos[1]}"; paso="${pos[2]}"
+case "$estado" in en-curso|hecho|needs-roberto) ;; *) print_error "estado inválido '$estado'." >&2; exit 1 ;; esac
+case "$paso" in plan|wk|rv|merge|cierre) ;; *) print_error "paso inválido '$paso'." >&2; exit 1 ;; esac
+
+cola=""
+if [[ -n "$cola_de" ]] && command -v herdr >/dev/null 2>&1; then
+    cola="$(herdr agent read "$cola_de" 2>&1 | tail -n 40 || true)"
+fi
+
+previo="{}"
+[[ -f "$trio_dir/status.json" ]] && previo="$(cat "$trio_dir/status.json")"
+json="$(jq -n --argjson p "$previo" --arg ticket "$(basename "$trio_dir")" --arg estado "$estado" \
+    --arg paso "$paso" --arg error "$error" --arg ts "$(date --iso-8601=seconds)" \
+    --arg pr "$pr" --arg head "$head" --arg cola "$cola" --arg intentos "$intentos" '
+    $p + {ticket: $ticket, estado: $estado, paso: $paso, error: $error, timestamp: $ts}
+    + (if $pr != "" then {pr: $pr} else {} end)
+    + (if $head != "" then {head: $head} else {} end)
+    + (if $intentos != "" then {intentos: ($intentos|tonumber)} else {} end)
+    + (if $cola != "" then {cola: $cola} else {} end)
+    | del(.fase)')"
+
+titulo="trío #$(basename "$trio_dir"): $estado"
+cuerpo="paso $paso${error:+: $error}"
+if [[ "$dry_run" -eq 1 ]]; then
+    echo "[dry-run] escribir $trio_dir/status.json"
+    echo "$json"
+    [[ "$notify" -eq 1 ]] && echo "[dry-run] notify-send -u critical \"$titulo\" \"$cuerpo\""
+    exit 0
+fi
+
+mkdir -p "$trio_dir"
+printf '%s\n' "$json" > "$trio_dir/status.json"
+if [[ "$notify" -eq 1 ]]; then
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -u critical "$titulo" "$cuerpo" || print_warn "notify-send falló." >&2
+    else
+        print_warn "notify-send no está en el PATH; solo quedó status.json." >&2
+    fi
+fi

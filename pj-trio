@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Command-line dispatcher for ravn-trio (pj-trio).
+#
+# Uso: pj-trio [start] [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>]
+#      pj-trio kickoff <proyecto> <ticket> [--repo <miembro>]
+#      pj-trio status [opciones] <trio_dir> <estado> <paso>
+#      pj-trio help
+# Sin subcomando, los argumentos van a `start` (compatible con la versión de workstation).
+
+set -Eeuo pipefail
+
+#--------------------------------#
+# import variables and functions #
+#--------------------------------#
+scrDir="$(dirname "$(realpath "$0")")"
+RUNTIME_DIR="$scrDir/runtime"
+# shellcheck disable=SC1091 # Resolved from the project root.
+source "$RUNTIME_DIR/helper/set_variable.sh"
+PROJECT_DIR="$TRIO_RUNTIME_DIR"
+# shellcheck disable=SC1091
+if ! source "$PROJECT_DIR/lib/presentation.sh"; then
+  echo "Error: unable to source presentation.sh..."
+  exit 1
+fi
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/lifecycle.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/command_catalog.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/dispatch.sh"
+
+trap cleanup_runtime SIGINT SIGTERM ERR EXIT
+
+main() {
+  if (($# > 0)) && command_catalog_get "$1" canonical 2> /dev/null; then
+    dispatch_command "$@" || return $?
+    return 0
+  fi
+  if (($# == 0)); then
+    dispatch_command help || return $?
+    return 0
+  fi
+  dispatch_command start "$@"
+}
+
+main "$@"
