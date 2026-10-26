@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+# User-facing help command module.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  set -Eeuo pipefail
+  module_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck disable=SC1091
+  source "$module_dir/../helper/set_variable.sh"
+  PROJECT_DIR="$TRIO_RUNTIME_DIR"
+  # shellcheck disable=SC1091
+  source "$PROJECT_DIR/lib/presentation.sh"
+  # shellcheck disable=SC1091 # Shared command metadata for global help.
+  source "$PROJECT_DIR/lib/command_catalog.sh"
+  # shellcheck disable=SC1091 # Focused command interface helper.
+  source "$PROJECT_DIR/lib/command_interface.sh"
+fi
+
+show_ravn_banner() {
+  echo -e "${CYAN}"
+  cat << 'BANNER_EOF'
+  ╭────────────────────────────────────────────────────╮
+  │                                                    │
+  │  ██████╗  █████╗ ██╗   ██╗███╗   ██╗               │
+  │  ██╔══██╗██╔══██╗██║   ██║████╗  ██║               │
+  │  ██████╔╝███████║██║   ██║██╔██╗ ██║               │
+  │  ██╔══██╗██╔══██║╚██╗ ██╔╝██║╚██╗██║               │
+  │  ██║  ██║██║  ██║ ╚████╔╝ ██║ ╚████║               │
+  │  ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═══╝               │
+  │                                                    │
+  │   Trío PM / WK / RV local en herdr                 │
+  │                                                    │
+BANNER_EOF
+  echo -e "  │     ${GRAY}by Roberto Flores${CYAN}                              │"
+  cat << 'BANNER_EOF'
+  │                                                    │
+  ╰────────────────────────────────────────────────────╯
+BANNER_EOF
+  echo -e "${NC}"
+}
+
+show_help() {
+  show_ravn_banner
+  print_section "󰋖 Help and Usage"
+
+  cat << 'HELP_EOF'
+  pj-trio abre en herdr el trío PM, WK y RV de un ticket y le pasa el arranque al PM.
+
+  BASIC USE
+    pj-trio <proyecto> <ticket> [--repo <miembro>]   Igual que `pj-trio start …`
+    pj-trio <command> [args]                         Run one action directly
+
+  COMMANDS
+HELP_EOF
+
+  show_command_catalog || return 1
+
+  cat << 'HELP_EOF'
+
+  CONFIGURATION
+    PJ_TRIO_CONFIG o /usr/share/ravn/trio/trio.conf; si no existe,
+    <proyecto>/.trio/trio.conf y por último trio.conf.example.
+
+  RECOMMENDED FLOW
+    1. pj-trio start --dry-run <proyecto> <ticket>
+    2. pj-trio start <proyecto> <ticket>
+HELP_EOF
+}
+
+show_command_catalog() {
+  local command=""
+  local description=""
+
+  while IFS= read -r command; do
+    command_catalog_get "$command" description || {
+      print_error "$GIT_SETUP_COMMAND_CATALOG_ERROR"
+      return 1
+    }
+    description="$GIT_SETUP_COMMAND_CATALOG_VALUE"
+    printf '    %-8s %s\n' "$command" "$description"
+  done < <(command_catalog_list all)
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  run_command_entrypoint help show_help show_help "$@"
+fi

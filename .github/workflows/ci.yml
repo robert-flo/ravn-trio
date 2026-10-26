@@ -47,7 +47,10 @@ jobs:
         run: |
           mkdir -p dest
           make DESTDIR=dest install
-          test -x dest/usr/bin/pj-trio
+          test -L dest/usr/bin/pj-trio
+          test -x dest/usr/share/ravn/trio/pj-trio
+          test -x dest/usr/share/ravn/trio/runtime/scripts/start
+          test -f dest/usr/share/ravn/trio/runtime/lib/presentation.sh
           test -x dest/usr/share/ravn/trio/trio-status
           test -f dest/usr/share/ravn/trio/trio-pm-prompt.md
           test -f dest/usr/share/ravn/trio/trio.conf.example

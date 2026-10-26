@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+# Kickoff command module: imprime el prompt de arranque del PM renderizado.
+set -Eeuo pipefail
+exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/start" --print-kickoff "$@"

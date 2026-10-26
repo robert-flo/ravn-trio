@@ -10,3 +10,7 @@ El empaquetado (PKGBUILD) vive en `ravn-trio-arch`, no acá.
 - Los prompts y los handoffs `.trio/` nombran solo roles (PM, WK, RV), nunca
   plataformas. Qué kind corre cada rol vive solo en la config (`trio.conf`).
 - Commits: identidad `Roberto Flores <25asab015@ujmd.edu.sv>`, sin force push.
+- Diseño de `robert-flo/pj-domina-rf-git-setup`: launcher + `runtime/commands.tsv`
+  + módulos en `runtime/scripts/`. `runtime/lib/{presentation,command_catalog,
+  command_interface,dispatch,lifecycle}.sh` se copian byte a byte de git-setup;
+  no editarlos acá (cambiarlos allá y re-copiar). Mensajes con `print_*`.

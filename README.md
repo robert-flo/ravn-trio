@@ -14,6 +14,24 @@ Para usarlo desde el checkout: `./pj-trio …` (busca los helpers junto a sí mi
 
 Requiere `herdr` ≥ 0.9.5, `jq`, `git` y `notify-send` (libnotify).
 
+## Estructura (lenguaje de diseño de git-setup)
+
+```text
+├── pj-trio                  # Launcher: despacha por runtime/commands.tsv; sin subcomando → start
+├── trio-status              # Alias de `pj-trio status` (lo invoca el PM)
+├── trio-pm-prompt.md        # Plantilla del arranque del PM
+├── trio.conf.example        # Defaults: kinds por rol, identidad git, integración herdr
+└── runtime/
+    ├── commands.tsv         # Catálogo: start, kickoff, status, help
+    ├── completion/pj-trio.bash
+    ├── helper/set_variable.sh
+    ├── lib/                 # presentation, command_catalog, command_interface, dispatch,
+    │                        # lifecycle (idénticos a git-setup) + trio_project/config/herdr
+    └── scripts/             # start, kickoff, status, help
+```
+
+Instalado: todo bajo `/usr/share/ravn/trio/` y `/usr/bin/pj-trio` → symlink al launcher.
+
 ## `pj-trio`
 
 `pj-trio` es un inicializador idempotente para herdr que prepara un workspace con tres tabs dedicados e independientes a pantalla completa para los roles del trío: **PM**, **WK** y **RV**.

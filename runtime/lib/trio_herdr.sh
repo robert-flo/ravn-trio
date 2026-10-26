@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+
+# Operaciones sobre herdr, agy y git que usa el módulo start.
+# shellcheck disable=SC2034,SC2154 # Globals are shared by runtime/scripts/start before these functions run.
+
+# Identidad git: la fija pj-trio en la config local de cada repo (idempotente).
+fijar_identidad_git() {
+    if [[ -z "$TRIO_GIT_NAME" || -z "$TRIO_GIT_EMAIL" ]]; then
+        print_warn "TRIO_GIT_NAME/TRIO_GIT_EMAIL vacíos en la config; no se fija identidad git." >&2
+        return 0
+    fi
+    local dirs=("$project_dir")
+    [[ -n "$repo_path" ]] && dirs+=("$repo_path")
+    local d
+    for d in "${dirs[@]}"; do
+        git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || continue
+        if [[ "$dry_run" -eq 1 ]]; then
+            echo "[dry-run] git -C \"$d\" config user.name \"$TRIO_GIT_NAME\""
+            echo "[dry-run] git -C \"$d\" config user.email \"$TRIO_GIT_EMAIL\""
+            continue
+        fi
+        [[ "$(git -C "$d" config --local user.name || true)" == "$TRIO_GIT_NAME" ]] || git -C "$d" config user.name "$TRIO_GIT_NAME"
+        [[ "$(git -C "$d" config --local user.email || true)" == "$TRIO_GIT_EMAIL" ]] || git -C "$d" config user.email "$TRIO_GIT_EMAIL"
+    done
+}
+
+# Envío del arranque al PM: una sola vez por ticket (marcador status.json).
+enviar_kickoff() {
+    if [[ "$kickoff" -eq 0 || -z "$PM_KIND" ]]; then
+        return 0
+    fi
+    if [[ "${pm_duplicado:-0}" -eq 1 ]]; then
+        print_warn "${agent_pm} ya corre en otro pane; no envío el arranque ni escribo status.json." >&2
+        return 0
+    fi
+    if [[ -f "${trio_dir}/status.json" ]]; then
+        echo "Arranque ya enviado (existe ${trio_dir}/status.json); no se reenvía."
+        return 0
+    fi
+    local texto
+    texto="$(renderizar_kickoff)" || return 1
+    if [[ "$dry_run" -eq 1 ]]; then
+        echo "[dry-run] mkdir -p \"$trio_dir\""
+        echo "[dry-run] herdr agent prompt \"$agent_pm\" \"<trio-pm-prompt.md renderizado>\""
+        "$trio_status" --dry-run "$trio_dir" en-curso plan
+        return 0
+    fi
+    local out
+    if ! out="$(herdr agent prompt "$agent_pm" "$texto" 2>&1)"; then
+        print_warn "no se pudo enviar el arranque a ${agent_pm}: ${out}" >&2
+        print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}" >&2
+        return 0
+    fi
+    "$trio_status" "$trio_dir" en-curso plan
+}
+
+# 5. Verificación de agentes disponibles para agy
+verificar_agentes_disponibles() {
+    local necesita_agy=0
+    for k in "$PM_KIND" "$WK_KIND" "$RV_KIND"; do
+        if [[ "$k" == agy ]]; then
+            necesita_agy=1
+            break
+        fi
+    done
+
+    if [[ "$necesita_agy" -eq 1 ]]; then
+        if ! command -v agy >/dev/null 2>&1; then
+            if [[ "$dry_run" -eq 1 ]]; then
+                echo "[dry-run] Aviso: 'agy' no está en el PATH; se omite la verificación de agentes." >&2
+                return 0
+            fi
+            print_error "el comando 'agy' no está disponible en el PATH." >&2
+            exit 1
+        fi
+        local available_agents
+        available_agents="$(agy agents 2>/dev/null || true)"
+        for role in PM WK RV; do
+            local k=""
+            case "$role" in
+                PM) k="$PM_KIND" ;;
+                WK) k="$WK_KIND" ;;
+                RV) k="$RV_KIND" ;;
+            esac
+            if [[ "$k" == agy ]]; then
+                local expected="${role}-${project_name}"
+                if ! echo "$available_agents" | grep -Fxq "$expected"; then
+                    print_error "el agente '$expected' no está disponible en 'agy agents'." >&2
+                    print_info "Asegurate de que el agente esté registrado en agy (ver 'agy agents')." >&2
+                    [[ "$dry_run" -eq 1 ]] || exit 1
+                fi
+            fi
+        done
+    fi
+}
+
+# 6. Instalación idempotente de integraciones de herdr
+instalar_integraciones() {
+    local kinds=()
+    for k in "$PM_KIND" "$WK_KIND" "$RV_KIND"; do
+        [[ -z "$k" ]] && continue
+        local target="$k"
+        if [[ "$k" == agy && -n "${TRIO_HERDR_INTEGRATION_AGY:-}" ]]; then
+            target="$TRIO_HERDR_INTEGRATION_AGY"
+        fi
+        local already=0
+        for item in "${kinds[@]}"; do
+            if [[ "$item" == "$target" ]]; then
+                already=1
+                break
+            fi
+        done
+        if [[ "$already" -eq 0 ]]; then
+            kinds+=("$target")
+        fi
+    done
+
+    if [[ ${#kinds[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    if [[ "$dry_run" -eq 1 ]]; then
+        if command -v herdr >/dev/null 2>&1; then
+            local status_out
+            status_out="$(herdr integration status 2>/dev/null || true)"
+            for target in "${kinds[@]}"; do
+                if echo "$status_out" | grep -E "^${target}:" | grep -q "not installed"; then
+                    echo "[dry-run] herdr integration install \"$target\""
+                fi
+            done
+        fi
+        return 0
+    fi
+
+    if ! command -v herdr >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local status_out
+    status_out="$(herdr integration status 2>/dev/null || true)"
+    for target in "${kinds[@]}"; do
+        if echo "$status_out" | grep -E "^${target}:" | grep -q "not installed"; then
+            echo "Instalando integración para $target..."
+            if ! herdr integration install "$target"; then
+                print_warn "no se pudo instalar la integración para $target" >&2
+            fi
+        fi
+    done
+}
+
+# 11. Inicio de agentes por rol
+iniciar_agente_rol() {
+    local role="$1"
+    local pane_id="$2"
+    local kind="$3"
+
+    if [[ -z "$kind" || -z "$pane_id" ]]; then
+        # Kind vacío o sin panel: queda el shell interactivo para inicio manual
+        return 0
+    fi
+
+    local agent_name
+    agent_name="$(nombre_agente "$role")"
+
+    local live_agents
+    live_agents="$(herdr agent list 2>/dev/null || true)"
+    if echo "$live_agents" | jq -e --arg p "$pane_id" \
+        '.result.agents[]? | select(.pane_id == $p)' >/dev/null 2>&1; then
+        return 0
+    fi
+    # El nombre es por proyecto: si ya vive en otro pane (otro ticket abierto), no se duplica.
+    if echo "$live_agents" | jq -e --arg n "$agent_name" \
+        '.result.agents[]? | select(.name == $n)' >/dev/null 2>&1; then
+        print_warn "el agente '${agent_name}' ya corre en otro pane; ese ticket ya tiene su trío abierto." >&2
+        [[ "$role" == "PM" ]] && pm_duplicado=1
+        return 0
+    fi
+
+    local pane_info
+    pane_info="$(herdr pane get "$pane_id" 2>/dev/null || true)"
+    if echo "$pane_info" | jq -e '.result.pane.agent // empty | select(. != "")' >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local agent_args=(--agent "${role}-${project_name}")
+    if [[ -n "$repo_path" ]]; then
+        agent_args+=(--add-dir "$repo_path")
+    fi
+
+    local start_output
+    if ! start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${agent_args[@]}" 2>&1)"; then
+        # Si el agente requiere interacción o confirmación inicial (ej. prompts de bienvenida o permisos),
+        # herdr reporta agent_not_ready. El proceso queda corriendo en el panel.
+        if ! echo "$start_output" | jq -e '.error.code == "agent_not_ready"' >/dev/null 2>&1; then
+            local err_msg
+            err_msg="$(echo "$start_output" | jq -r '.error.message // empty' 2>/dev/null || true)"
+            if [[ -n "$err_msg" ]]; then
+                print_warn "no se pudo iniciar automáticamente el agente para ${role}: ${err_msg}" >&2
+            else
+                print_warn "no se pudo iniciar automáticamente el agente para ${role}: ${start_output}" >&2
+            fi
+        fi
+    fi
+}
