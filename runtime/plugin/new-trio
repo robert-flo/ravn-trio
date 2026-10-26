@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Acción "New trio" del plugin de herdr: deduce proyecto y ticket del contexto
+# que inyecta herdr y corre pj-trio. Sin estado propio y nada en $HOME.
+set -euo pipefail
+
+plugin_root="${HERDR_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+ctx="${HERDR_PLUGIN_CONTEXT_JSON:-}"
+[[ -n "$ctx" ]] || ctx='{}'
+
+campo() { jq -r "$1 // empty" <<<"$ctx" 2>/dev/null || true; }
+
+avisar() {
+    echo "new-trio: $*" >&2
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send "ravn-trio" "$*" || true
+    fi
+}
+
+# Ticket: URL de issue clicada, si no el texto seleccionado (número o #número).
+url="${HERDR_PLUGIN_CLICKED_URL:-$(campo '.clicked_url')}"
+ticket="${PJ_TRIO_TICKET:-}"
+if [[ -z "$ticket" && "$url" =~ /issues/([0-9]+)$ ]]; then
+    ticket="${BASH_REMATCH[1]}"
+fi
+if [[ -z "$ticket" ]]; then
+    sel="$(campo '.selected_text // .selection.text')"
+    if [[ "$sel" =~ ^[[:space:]]*#?([0-9]+)[[:space:]]*$ ]]; then
+        ticket="${BASH_REMATCH[1]}"
+    fi
+fi
+
+# Proyecto: el worktree o el cwd del panel enfocado, subido a la raíz git.
+proyecto="${PJ_TRIO_PROYECTO:-}"
+if [[ -z "$proyecto" ]]; then
+    proyecto="$(campo '.worktree.path // .worktree.root // .pane.cwd // .focused_pane.cwd // .workspace.cwd')"
+fi
+if [[ -n "$proyecto" && -d "$proyecto" ]]; then
+    proyecto="$(git -C "$proyecto" rev-parse --show-toplevel 2>/dev/null || echo "$proyecto")"
+fi
+
+if [[ -z "$ticket" ]]; then
+    avisar "no encontré el ticket: clicá la URL del issue o seleccioná su número."
+    exit 1
+fi
+if [[ -z "$proyecto" || ! -d "$proyecto" ]]; then
+    avisar "no encontré el proyecto: abrí la acción desde un panel dentro del meta-repo pj-*."
+    exit 1
+fi
+
+pj_trio="${plugin_root}/pj-trio"
+[[ -x "$pj_trio" ]] || pj_trio="$(command -v pj-trio || echo pj-trio)"
+if [[ -n "${HERDR_BIN_PATH:-}" ]]; then
+    PATH="$(dirname "$HERDR_BIN_PATH"):$PATH"
+    export PATH
+fi
+extra=()
+read -ra extra <<<"${PJ_TRIO_PLUGIN_ARGS:-}"
+exec "$pj_trio" "${extra[@]}" "$proyecto" "$ticket"

@@ -33,7 +33,7 @@ Uso: pj-trio [start] [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ti
 Argumentos:
   <proyecto>        Ruta o nombre del proyecto meta (pj-*).
                     Si se pasa solo el nombre, se busca en $PJ_TRIO_ROOT,
-                    en el directorio padre de $PWD o en ~/.cache/ravn-piloto.
+                    en el directorio padre de $PWD o en /z-drive/tries.
   <ticket>          Identificador numérico o alfanumérico del ticket / issue.
 
 Opciones:
@@ -124,7 +124,7 @@ if [[ "$dry_run" -eq 1 ]]; then
         echo "[dry-run] Repositorio miembro: $repo_path ($repo_name)"
     fi
     echo "[dry-run] Workspace label: $ws_label"
-    echo "[dry-run] Archivo de configuración: $config_file"
+    echo "[dry-run] Configuración (capas, la última gana): $config_file"
     echo "[dry-run] Kinds: PM='${PM_KIND}' WK='${WK_KIND}' RV='${RV_KIND}'"
     echo ""
     instalar_integraciones

@@ -19,6 +19,7 @@ install:
 	install -d "$(DESTDIR)$(SHAREDIR)/runtime/lib"
 	install -d "$(DESTDIR)$(SHAREDIR)/runtime/scripts"
 	install -d "$(DESTDIR)$(SHAREDIR)/runtime/completion"
+	install -d "$(DESTDIR)$(SHAREDIR)/runtime/plugin"
 	install -m 755 pj-trio "$(DESTDIR)$(SHAREDIR)/pj-trio"
 	install -m 755 trio-status "$(DESTDIR)$(SHAREDIR)/trio-status"
 	install -m 644 trio-pm-prompt.md "$(DESTDIR)$(SHAREDIR)/trio-pm-prompt.md"
@@ -27,11 +28,13 @@ install:
 	install -m 644 runtime/helper/set_variable.sh "$(DESTDIR)$(SHAREDIR)/runtime/helper/set_variable.sh"
 	install -m 644 runtime/lib/*.sh "$(DESTDIR)$(SHAREDIR)/runtime/lib/"
 	install -m 755 runtime/scripts/* "$(DESTDIR)$(SHAREDIR)/runtime/scripts/"
+	install -m 644 herdr-plugin.toml "$(DESTDIR)$(SHAREDIR)/herdr-plugin.toml"
+	install -m 755 runtime/plugin/new-trio "$(DESTDIR)$(SHAREDIR)/runtime/plugin/new-trio"
 	install -m 644 runtime/completion/pj-trio.bash "$(DESTDIR)$(SHAREDIR)/runtime/completion/pj-trio.bash"
 	ln -sf "$(SHAREDIR)/pj-trio" "$(DESTDIR)$(BINDIR)/pj-trio"
 
 lint:
-	shellcheck -x pj-trio trio-status runtime/scripts/* runtime/lib/*.sh runtime/helper/*.sh runtime/completion/*.bash tests/*.sh
+	shellcheck -x pj-trio trio-status runtime/scripts/* runtime/lib/*.sh runtime/helper/*.sh runtime/plugin/* runtime/completion/*.bash tests/*.sh
 
 test:
 	bash tests/run.sh

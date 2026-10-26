@@ -8,6 +8,8 @@ TRIO_RUNTIME_DIR="${TRIO_RUNTIME_DIR:-$(cd "$helper_dir/.." && pwd)}"
 TRIO_ROOT="${TRIO_ROOT:-$(cd "$TRIO_RUNTIME_DIR/.." && pwd)}"
 # Defaults del sistema (ver Makefile: SHAREDIR). Nada en $HOME.
 TRIO_SHARE_DIR="${TRIO_SHARE_DIR:-/usr/share/ravn/trio}"
+# Override de la máquina, entre los defaults y el repo (ver trio_cargar_config).
+TRIO_OVERRIDE_DIR="${TRIO_OVERRIDE_DIR:-/zt/ravn/trio}"
 
 export TRIO_RUNTIME_DIR
 export TRIO_ROOT
