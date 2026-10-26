@@ -1,0 +1,634 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# pj-trio — Inicializador idempotente de tabs en herdr para el trío (PM, WK, RV)
+#
+# Uso: pj-trio [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>]
+#
+# Crea o reutiliza un workspace en herdr con tres tabs independientes a pantalla completa:
+# - pm: agente PM-<proyecto> (panel PM-<ticket>, nombre herdr pm-<proyecto>-<ticket>)
+# - wk: agente WK-<proyecto> (panel WK-<ticket>, nombre herdr wk-<proyecto>-<ticket>)
+# - rv: agente RV-<proyecto> (panel RV-<ticket>, nombre herdr rv-<proyecto>-<ticket>)
+#
+# Además fija la identidad git del meta-repo y del miembro (TRIO_GIT_NAME/EMAIL)
+# y envía al PM el prompt de arranque (trio-pm-prompt.md) una sola vez por ticket:
+# el marcador es <proyecto>/.trio/<ticket>/status.json.
+#
+# Cwd de los tabs: el directorio del proyecto meta (carpeta pj-).
+# Si se especifica un repositorio miembro (--repo), se añade al espacio de trabajo
+# del agente mediante --add-dir.
+
+mostrar_uso() {
+    cat <<'EOF'
+Uso: pj-trio [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>]
+
+Argumentos:
+  <proyecto>        Ruta o nombre del proyecto meta (pj-*).
+                    Si se pasa solo el nombre, se busca en $PJ_TRIO_ROOT,
+                    en el directorio padre de $PWD o en ~/.cache/ravn-piloto.
+  <ticket>          Identificador numérico o alfanumérico del ticket / issue.
+
+Opciones:
+  --repo <miembro>  Repositorio miembro del proyecto (hermano, subdirectorio o ruta).
+                    Se pasa a cada agente mediante --add-dir.
+  --dry-run         Muestra los comandos sin ejecutarlos.
+  --no-kickoff      No envía el prompt de arranque al PM.
+  --print-kickoff   Imprime el prompt de arranque del PM y sale (no toca herdr).
+  -h, --help        Muestra esta ayuda.
+EOF
+}
+
+# 1. Parseo de argumentos
+dry_run=0
+kickoff=1
+print_kickoff=0
+repo_arg=""
+positional=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run)
+            dry_run=1
+            shift
+            ;;
+        --no-kickoff)
+            kickoff=0
+            shift
+            ;;
+        --print-kickoff)
+            print_kickoff=1
+            shift
+            ;;
+        --repo)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --repo requiere un argumento." >&2
+                exit 1
+            fi
+            repo_arg="$2"
+            shift 2
+            ;;
+        --repo=*)
+            repo_arg="${1#*=}"
+            shift
+            ;;
+        -h|--help)
+            mostrar_uso
+            exit 0
+            ;;
+        -*)
+            echo "Error: opción desconocida '$1'" >&2
+            mostrar_uso >&2
+            exit 1
+            ;;
+        *)
+            positional+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ ${#positional[@]} -ne 2 ]]; then
+    echo "Error: se requieren exactamente dos argumentos posicionales (<proyecto> y <ticket>)." >&2
+    mostrar_uso >&2
+    exit 1
+fi
+
+proyecto_arg="${positional[0]}"
+ticket="${positional[1]}"
+
+# 2. Resolución del directorio del proyecto meta
+project_dir=""
+if [[ -d "$proyecto_arg" ]]; then
+    project_dir="$(cd "$proyecto_arg" && pwd)"
+else
+    candidates=()
+    if [[ -n "${PJ_TRIO_ROOT:-}" ]]; then
+        candidates+=("${PJ_TRIO_ROOT}")
+    fi
+    candidates+=("$(dirname "$PWD")" "${HOME}/.cache/ravn-piloto")
+    for c in "${candidates[@]}"; do
+        if [[ -d "${c}/${proyecto_arg}" ]]; then
+            project_dir="$(cd "${c}/${proyecto_arg}" && pwd)"
+            break
+        fi
+    done
+fi
+
+if [[ -z "$project_dir" ]]; then
+    echo "Error: no se encontró el directorio del proyecto '$proyecto_arg'" >&2
+    echo "Pista: podés pasar una ruta existente o configurar \$PJ_TRIO_ROOT (por defecto busca en el directorio padre de \$PWD o ~/.cache/ravn-piloto)." >&2
+    exit 1
+fi
+
+project_name="$(basename "$project_dir")"
+
+# 3. Resolución del repositorio miembro opcional (--repo)
+repo_path=""
+repo_name=""
+if [[ -n "$repo_arg" ]]; then
+    if [[ -d "$repo_arg" ]]; then
+        repo_path="$(cd "$repo_arg" && pwd)"
+    elif [[ -d "$(dirname "$project_dir")/$repo_arg" ]]; then
+        repo_path="$(cd "$(dirname "$project_dir")/$repo_arg" && pwd)"
+    elif [[ -d "${project_dir}/$repo_arg" ]]; then
+        repo_path="$(cd "${project_dir}/$repo_arg" && pwd)"
+    elif [[ -n "${PJ_TRIO_ROOT:-}" && -d "${PJ_TRIO_ROOT}/$repo_arg" ]]; then
+        repo_path="$(cd "${PJ_TRIO_ROOT}/$repo_arg" && pwd)"
+    else
+        echo "Error: no se encontró el repositorio miembro '$repo_arg'" >&2
+        echo "Pista: el repositorio miembro debe existir como ruta o hermano/subdirectorio del proyecto." >&2
+        exit 1
+    fi
+    repo_name="$(basename "$repo_path")"
+fi
+
+if [[ -n "$repo_name" ]]; then
+    ws_label="trio ${project_name}/${repo_name}#${ticket}"
+else
+    ws_label="trio ${project_name}#${ticket}"
+fi
+
+# 4. Carga de configuración de kinds por rol
+PM_KIND=""
+WK_KIND=""
+RV_KIND=""
+TRIO_GIT_NAME=""
+TRIO_GIT_EMAIL=""
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+config_file="${PJ_TRIO_CONFIG:-/usr/share/ravn/trio/trio.conf}"
+
+if [[ ! -f "$config_file" ]]; then
+    if [[ -f "${project_dir}/.trio/trio.conf" ]]; then
+        config_file="${project_dir}/.trio/trio.conf"
+    elif [[ -f "${script_dir}/trio.conf.example" ]]; then
+        config_file="${script_dir}/trio.conf.example"
+    elif [[ -f "${project_dir}/scripts/trio.conf.example" ]]; then
+        config_file="${project_dir}/scripts/trio.conf.example"
+    fi
+fi
+
+if [[ -f "$config_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$config_file"
+fi
+
+# 4b. Nombres de agente por proyecto y ticket (permite varios tríos por proyecto)
+nombre_agente() {
+    local t
+    t="$(echo "$ticket" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')"
+    echo "${1}-${project_name}-${t}" | tr '[:upper:]' '[:lower:]'
+}
+agent_pm="$(nombre_agente pm)"
+agent_wk="$(nombre_agente wk)"
+agent_rv="$(nombre_agente rv)"
+
+trio_dir="${project_dir}/.trio/${ticket}"
+miembro_dir="${repo_path:-$project_dir}"
+
+prompt_template="${PJ_TRIO_PM_PROMPT:-}"
+if [[ -z "$prompt_template" ]]; then
+    for c in /usr/share/ravn/trio/trio-pm-prompt.md "${script_dir}/trio-pm-prompt.md"; do
+        if [[ -f "$c" ]]; then
+            prompt_template="$c"
+            break
+        fi
+    done
+fi
+
+# Helper de status.json: junto a pj-trio, en /usr/share/ravn/trio o en el PATH.
+trio_status="${script_dir}/trio-status"
+if [[ ! -x "$trio_status" ]]; then
+    if [[ -x /usr/share/ravn/trio/trio-status ]]; then
+        trio_status=/usr/share/ravn/trio/trio-status
+    else
+        trio_status="$(command -v trio-status || echo trio-status)"
+    fi
+fi
+
+renderizar_kickoff() {
+    if [[ -z "$prompt_template" || ! -f "$prompt_template" ]]; then
+        echo "Error: no se encontró trio-pm-prompt.md (definí PJ_TRIO_PM_PROMPT)." >&2
+        return 1
+    fi
+    local t
+    t="$(cat "$prompt_template")"
+    t="${t//\{\{PROYECTO\}\}/$project_name}"
+    t="${t//\{\{PROYECTO_DIR\}\}/$project_dir}"
+    t="${t//\{\{TICKET\}\}/$ticket}"
+    t="${t//\{\{MIEMBRO_DIR\}\}/$miembro_dir}"
+    t="${t//\{\{TRIO_DIR\}\}/$trio_dir}"
+    t="${t//\{\{AGENTE_PM\}\}/$agent_pm}"
+    t="${t//\{\{AGENTE_WK\}\}/$agent_wk}"
+    t="${t//\{\{AGENTE_RV\}\}/$agent_rv}"
+    t="${t//\{\{TRIO_STATUS\}\}/$trio_status}"
+    printf '%s\n' "$t"
+}
+
+if [[ "$print_kickoff" -eq 1 ]]; then
+    renderizar_kickoff
+    exit $?
+fi
+
+# Identidad git: la fija pj-trio en la config local de cada repo (idempotente).
+fijar_identidad_git() {
+    if [[ -z "$TRIO_GIT_NAME" || -z "$TRIO_GIT_EMAIL" ]]; then
+        echo "Aviso: TRIO_GIT_NAME/TRIO_GIT_EMAIL vacíos en la config; no se fija identidad git." >&2
+        return 0
+    fi
+    local dirs=("$project_dir")
+    [[ -n "$repo_path" ]] && dirs+=("$repo_path")
+    local d
+    for d in "${dirs[@]}"; do
+        git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || continue
+        if [[ "$dry_run" -eq 1 ]]; then
+            echo "[dry-run] git -C \"$d\" config user.name \"$TRIO_GIT_NAME\""
+            echo "[dry-run] git -C \"$d\" config user.email \"$TRIO_GIT_EMAIL\""
+            continue
+        fi
+        [[ "$(git -C "$d" config --local user.name || true)" == "$TRIO_GIT_NAME" ]] || git -C "$d" config user.name "$TRIO_GIT_NAME"
+        [[ "$(git -C "$d" config --local user.email || true)" == "$TRIO_GIT_EMAIL" ]] || git -C "$d" config user.email "$TRIO_GIT_EMAIL"
+    done
+}
+
+# Envío del arranque al PM: una sola vez por ticket (marcador status.json).
+enviar_kickoff() {
+    if [[ "$kickoff" -eq 0 || -z "$PM_KIND" ]]; then
+        return 0
+    fi
+    if [[ "${pm_duplicado:-0}" -eq 1 ]]; then
+        echo "Aviso: ${agent_pm} ya corre en otro pane; no envío el arranque ni escribo status.json." >&2
+        return 0
+    fi
+    if [[ -f "${trio_dir}/status.json" ]]; then
+        echo "Arranque ya enviado (existe ${trio_dir}/status.json); no se reenvía."
+        return 0
+    fi
+    local texto
+    texto="$(renderizar_kickoff)" || return 1
+    if [[ "$dry_run" -eq 1 ]]; then
+        echo "[dry-run] mkdir -p \"$trio_dir\""
+        echo "[dry-run] herdr agent prompt \"$agent_pm\" \"<trio-pm-prompt.md renderizado>\""
+        "$trio_status" --dry-run "$trio_dir" en-curso plan
+        return 0
+    fi
+    local out
+    if ! out="$(herdr agent prompt "$agent_pm" "$texto" 2>&1)"; then
+        echo "Aviso: no se pudo enviar el arranque a ${agent_pm}: ${out}" >&2
+        echo "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}" >&2
+        return 0
+    fi
+    "$trio_status" "$trio_dir" en-curso plan
+}
+
+# 5. Verificación de agentes disponibles para agy
+verificar_agentes_disponibles() {
+    local necesita_agy=0
+    for k in "$PM_KIND" "$WK_KIND" "$RV_KIND"; do
+        if [[ "$k" == agy ]]; then
+            necesita_agy=1
+            break
+        fi
+    done
+
+    if [[ "$necesita_agy" -eq 1 ]]; then
+        if ! command -v agy >/dev/null 2>&1; then
+            if [[ "$dry_run" -eq 1 ]]; then
+                echo "[dry-run] Aviso: 'agy' no está en el PATH; se omite la verificación de agentes." >&2
+                return 0
+            fi
+            echo "Error: el comando 'agy' no está disponible en el PATH." >&2
+            exit 1
+        fi
+        local available_agents
+        available_agents="$(agy agents 2>/dev/null || true)"
+        for role in PM WK RV; do
+            local k=""
+            case "$role" in
+                PM) k="$PM_KIND" ;;
+                WK) k="$WK_KIND" ;;
+                RV) k="$RV_KIND" ;;
+            esac
+            if [[ "$k" == agy ]]; then
+                local expected="${role}-${project_name}"
+                if ! echo "$available_agents" | grep -Fxq "$expected"; then
+                    echo "Error: el agente '$expected' no está disponible en 'agy agents'." >&2
+                    echo "Asegurate de que el agente esté registrado en agy (ver 'agy agents')." >&2
+                    [[ "$dry_run" -eq 1 ]] || exit 1
+                fi
+            fi
+        done
+    fi
+}
+
+# 6. Instalación idempotente de integraciones de herdr
+instalar_integraciones() {
+    local kinds=()
+    for k in "$PM_KIND" "$WK_KIND" "$RV_KIND"; do
+        [[ -z "$k" ]] && continue
+        local target="$k"
+        if [[ "$k" == agy && -n "${TRIO_HERDR_INTEGRATION_AGY:-}" ]]; then
+            target="$TRIO_HERDR_INTEGRATION_AGY"
+        fi
+        local already=0
+        for item in "${kinds[@]}"; do
+            if [[ "$item" == "$target" ]]; then
+                already=1
+                break
+            fi
+        done
+        if [[ "$already" -eq 0 ]]; then
+            kinds+=("$target")
+        fi
+    done
+
+    if [[ ${#kinds[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    if [[ "$dry_run" -eq 1 ]]; then
+        if command -v herdr >/dev/null 2>&1; then
+            local status_out
+            status_out="$(herdr integration status 2>/dev/null || true)"
+            for target in "${kinds[@]}"; do
+                if echo "$status_out" | grep -E "^${target}:" | grep -q "not installed"; then
+                    echo "[dry-run] herdr integration install \"$target\""
+                fi
+            done
+        fi
+        return 0
+    fi
+
+    if ! command -v herdr >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local status_out
+    status_out="$(herdr integration status 2>/dev/null || true)"
+    for target in "${kinds[@]}"; do
+        if echo "$status_out" | grep -E "^${target}:" | grep -q "not installed"; then
+            echo "Instalando integración para $target..."
+            if ! herdr integration install "$target"; then
+                echo "Aviso: no se pudo instalar la integración para $target" >&2
+            fi
+        fi
+    done
+}
+
+# 7. Modo --dry-run
+verificar_agentes_disponibles
+
+if [[ "$dry_run" -eq 1 ]]; then
+    echo "[dry-run] Proyecto resuelto: $project_dir ($project_name)"
+    if [[ -n "$repo_path" ]]; then
+        echo "[dry-run] Repositorio miembro: $repo_path ($repo_name)"
+    fi
+    echo "[dry-run] Workspace label: $ws_label"
+    echo "[dry-run] Archivo de configuración: $config_file"
+    echo "[dry-run] Kinds: PM='${PM_KIND}' WK='${WK_KIND}' RV='${RV_KIND}'"
+    echo ""
+    instalar_integraciones
+    echo "[dry-run] herdr workspace create --cwd \"$project_dir\" --label \"$ws_label\" --no-focus"
+    echo "[dry-run] herdr tab rename \"<id_tab_pm>\" pm"
+    echo "[dry-run] herdr pane rename \"<id_pane_pm>\" \"PM-${ticket}\""
+    echo "[dry-run] herdr tab create --workspace \"<id_ws>\" --cwd \"$project_dir\" --label wk --no-focus"
+    echo "[dry-run] herdr pane rename \"<id_pane_wk>\" \"WK-${ticket}\""
+    echo "[dry-run] herdr tab create --workspace \"<id_ws>\" --cwd \"$project_dir\" --label rv --no-focus"
+    echo "[dry-run] herdr pane rename \"<id_pane_rv>\" \"RV-${ticket}\""
+
+    for role in PM WK RV; do
+        role_lower=$(echo "$role" | tr '[:upper:]' '[:lower:]')
+        k=""
+        an=""
+        case "$role" in
+            PM) k="$PM_KIND"; an="$agent_pm" ;;
+            WK) k="$WK_KIND"; an="$agent_wk" ;;
+            RV) k="$RV_KIND"; an="$agent_rv" ;;
+        esac
+        if [[ -n "$k" ]]; then
+            extra_args="-- --agent \"${role}-${project_name}\""
+            if [[ -n "$repo_path" ]]; then
+                extra_args="$extra_args --add-dir \"$repo_path\""
+            fi
+            echo "[dry-run] herdr agent start \"$an\" --kind \"$k\" --pane \"<id_pane_${role_lower}>\" $extra_args"
+        else
+            echo "[dry-run] # ${role}_KIND vacío: se deja el shell en tab ${role_lower}"
+        fi
+    done
+
+    fijar_identidad_git
+    enviar_kickoff
+
+    echo ""
+    echo "Workspace ID: <simulado> ($ws_label)"
+    echo "Tabs y roles:"
+    echo "  - pm: PM-${ticket} ($agent_pm) en <id_pane_pm>"
+    echo "  - wk: WK-${ticket} ($agent_wk) en <id_pane_wk>"
+    echo "  - rv: RV-${ticket} ($agent_rv) en <id_pane_rv>"
+    echo "Comando para adjuntarte:"
+    echo "  herdr workspace focus <simulado> && herdr"
+    exit 0
+fi
+
+# 8. Verificación de herdr
+if ! command -v herdr >/dev/null 2>&1; then
+    echo "Error: el comando 'herdr' no está instalado en el PATH." >&2
+    exit 1
+fi
+
+if ! ws_list_json="$(herdr workspace list 2>&1)"; then
+    echo "Error: no se pudo comunicar con el servidor de herdr." >&2
+    echo "Detalle: $ws_list_json" >&2
+    echo "Asegurate de que el servidor esté activo ejecutando 'herdr server' o abriendo 'herdr'." >&2
+    exit 1
+fi
+
+# 9. Instalación de integraciones e identidad git
+instalar_integraciones
+fijar_identidad_git
+
+# 10. Creación o reutilización del workspace y tabs (idempotente)
+existing_ws_id="$(echo "$ws_list_json" | jq -r --arg label "$ws_label" '.result.workspaces[]? | select(.label == $label) | .workspace_id' | head -n 1)"
+
+ws_id=""
+pm_tab=""
+pm_pane=""
+wk_tab=""
+wk_pane=""
+rv_tab=""
+rv_pane=""
+
+if [[ -n "$existing_ws_id" ]]; then
+    ws_id="$existing_ws_id"
+    tabs_json="$(herdr tab list --workspace "$ws_id")"
+    panes_json="$(herdr pane list --workspace "$ws_id")"
+
+    # Tab PM
+    pm_tab="$(echo "$tabs_json" | jq -r '.result.tabs[]? | select(.label == "pm") | .tab_id' | head -n 1)"
+    if [[ -z "$pm_tab" ]]; then
+        first_tab="$(echo "$tabs_json" | jq -r '.result.tabs[0]?.tab_id // empty')"
+        if [[ -n "$first_tab" ]]; then
+            pm_tab="$first_tab"
+            herdr tab rename "$pm_tab" pm >/dev/null
+        else
+            pm_create="$(herdr tab create --workspace "$ws_id" --cwd "$project_dir" --label pm --no-focus)"
+            pm_tab="$(echo "$pm_create" | jq -r '.result.tab.tab_id')"
+            pm_pane="$(echo "$pm_create" | jq -r '.result.root_pane.pane_id')"
+        fi
+    fi
+    if [[ -z "$pm_pane" ]]; then
+        pm_pane="$(echo "$panes_json" | jq -r --arg t "$pm_tab" '.result.panes[]? | select(.tab_id == $t) | .pane_id' | head -n 1)"
+    fi
+    if [[ -n "$pm_pane" ]]; then
+        herdr pane rename "$pm_pane" "PM-${ticket}" >/dev/null
+    fi
+
+    # Tab WK
+    wk_tab="$(echo "$tabs_json" | jq -r '.result.tabs[]? | select(.label == "wk") | .tab_id' | head -n 1)"
+    if [[ -z "$wk_tab" ]]; then
+        wk_create="$(herdr tab create --workspace "$ws_id" --cwd "$project_dir" --label wk --no-focus)"
+        wk_tab="$(echo "$wk_create" | jq -r '.result.tab.tab_id')"
+        wk_pane="$(echo "$wk_create" | jq -r '.result.root_pane.pane_id')"
+    else
+        wk_pane="$(echo "$panes_json" | jq -r --arg t "$wk_tab" '.result.panes[]? | select(.tab_id == $t) | .pane_id' | head -n 1)"
+    fi
+    if [[ -n "$wk_pane" ]]; then
+        herdr pane rename "$wk_pane" "WK-${ticket}" >/dev/null
+    fi
+
+    # Tab RV
+    rv_tab="$(echo "$tabs_json" | jq -r '.result.tabs[]? | select(.label == "rv") | .tab_id' | head -n 1)"
+    if [[ -z "$rv_tab" ]]; then
+        rv_create="$(herdr tab create --workspace "$ws_id" --cwd "$project_dir" --label rv --no-focus)"
+        rv_tab="$(echo "$rv_create" | jq -r '.result.tab.tab_id')"
+        rv_pane="$(echo "$rv_create" | jq -r '.result.root_pane.pane_id')"
+    else
+        rv_pane="$(echo "$panes_json" | jq -r --arg t "$rv_tab" '.result.panes[]? | select(.tab_id == $t) | .pane_id' | head -n 1)"
+    fi
+    if [[ -n "$rv_pane" ]]; then
+        herdr pane rename "$rv_pane" "RV-${ticket}" >/dev/null
+    fi
+else
+    create_json="$(herdr workspace create --cwd "$project_dir" --label "$ws_label" --no-focus)"
+    if echo "$create_json" | jq -e '.error' >/dev/null 2>&1; then
+        err_msg="$(echo "$create_json" | jq -r '.error.message // .error.code')"
+        echo "Error al crear el workspace en herdr: $err_msg" >&2
+        exit 1
+    fi
+
+    ws_id="$(echo "$create_json" | jq -r '.result.workspace.workspace_id')"
+    pm_tab="$(echo "$create_json" | jq -r '.result.tab.tab_id')"
+    pm_pane="$(echo "$create_json" | jq -r '.result.root_pane.pane_id')"
+    herdr tab rename "$pm_tab" pm >/dev/null
+    herdr pane rename "$pm_pane" "PM-${ticket}" >/dev/null
+
+    wk_create="$(herdr tab create --workspace "$ws_id" --cwd "$project_dir" --label wk --no-focus)"
+    if echo "$wk_create" | jq -e '.error' >/dev/null 2>&1; then
+        err_msg="$(echo "$wk_create" | jq -r '.error.message // .error.code')"
+        echo "Error al crear tab wk: $err_msg" >&2
+        exit 1
+    fi
+    wk_tab="$(echo "$wk_create" | jq -r '.result.tab.tab_id')"
+    wk_pane="$(echo "$wk_create" | jq -r '.result.root_pane.pane_id')"
+    herdr pane rename "$wk_pane" "WK-${ticket}" >/dev/null
+
+    rv_create="$(herdr tab create --workspace "$ws_id" --cwd "$project_dir" --label rv --no-focus)"
+    if echo "$rv_create" | jq -e '.error' >/dev/null 2>&1; then
+        err_msg="$(echo "$rv_create" | jq -r '.error.message // .error.code')"
+        echo "Error al crear tab rv: $err_msg" >&2
+        exit 1
+    fi
+    rv_tab="$(echo "$rv_create" | jq -r '.result.tab.tab_id')"
+    rv_pane="$(echo "$rv_create" | jq -r '.result.root_pane.pane_id')"
+    herdr pane rename "$rv_pane" "RV-${ticket}" >/dev/null
+fi
+
+# Asegurar IDs de paneles si hicieron falta en reutilización
+if [[ -z "$pm_pane" || -z "$wk_pane" || -z "$rv_pane" ]]; then
+    fresh_panes="$(herdr pane list --workspace "$ws_id")"
+    if [[ -z "$pm_pane" && -n "$pm_tab" ]]; then
+        pm_pane="$(echo "$fresh_panes" | jq -r --arg t "$pm_tab" '.result.panes[]? | select(.tab_id == $t) | .pane_id' | head -n 1)"
+        [[ -n "$pm_pane" ]] && herdr pane rename "$pm_pane" "PM-${ticket}" >/dev/null
+    fi
+    if [[ -z "$wk_pane" && -n "$wk_tab" ]]; then
+        wk_pane="$(echo "$fresh_panes" | jq -r --arg t "$wk_tab" '.result.panes[]? | select(.tab_id == $t) | .pane_id' | head -n 1)"
+        [[ -n "$wk_pane" ]] && herdr pane rename "$wk_pane" "WK-${ticket}" >/dev/null
+    fi
+    if [[ -z "$rv_pane" && -n "$rv_tab" ]]; then
+        rv_pane="$(echo "$fresh_panes" | jq -r --arg t "$rv_tab" '.result.panes[]? | select(.tab_id == $t) | .pane_id' | head -n 1)"
+        [[ -n "$rv_pane" ]] && herdr pane rename "$rv_pane" "RV-${ticket}" >/dev/null
+    fi
+fi
+
+# 11. Inicio de agentes por rol
+iniciar_agente_rol() {
+    local role="$1"
+    local pane_id="$2"
+    local kind="$3"
+
+    if [[ -z "$kind" || -z "$pane_id" ]]; then
+        # Kind vacío o sin panel: queda el shell interactivo para inicio manual
+        return 0
+    fi
+
+    local agent_name
+    agent_name="$(nombre_agente "$role")"
+
+    local live_agents
+    live_agents="$(herdr agent list 2>/dev/null || true)"
+    if echo "$live_agents" | jq -e --arg p "$pane_id" \
+        '.result.agents[]? | select(.pane_id == $p)' >/dev/null 2>&1; then
+        return 0
+    fi
+    # El nombre es por proyecto: si ya vive en otro pane (otro ticket abierto), no se duplica.
+    if echo "$live_agents" | jq -e --arg n "$agent_name" \
+        '.result.agents[]? | select(.name == $n)' >/dev/null 2>&1; then
+        echo "Aviso: el agente '${agent_name}' ya corre en otro pane; ese ticket ya tiene su trío abierto." >&2
+        [[ "$role" == "PM" ]] && pm_duplicado=1
+        return 0
+    fi
+
+    local pane_info
+    pane_info="$(herdr pane get "$pane_id" 2>/dev/null || true)"
+    if echo "$pane_info" | jq -e '.result.pane.agent // empty | select(. != "")' >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local agent_args=(--agent "${role}-${project_name}")
+    if [[ -n "$repo_path" ]]; then
+        agent_args+=(--add-dir "$repo_path")
+    fi
+
+    local start_output
+    if ! start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${agent_args[@]}" 2>&1)"; then
+        # Si el agente requiere interacción o confirmación inicial (ej. prompts de bienvenida o permisos),
+        # herdr reporta agent_not_ready. El proceso queda corriendo en el panel.
+        if ! echo "$start_output" | jq -e '.error.code == "agent_not_ready"' >/dev/null 2>&1; then
+            local err_msg
+            err_msg="$(echo "$start_output" | jq -r '.error.message // empty' 2>/dev/null || true)"
+            if [[ -n "$err_msg" ]]; then
+                echo "Aviso: no se pudo iniciar automáticamente el agente para ${role}: ${err_msg}" >&2
+            else
+                echo "Aviso: no se pudo iniciar automáticamente el agente para ${role}: ${start_output}" >&2
+            fi
+        fi
+    fi
+}
+
+pm_duplicado=0
+iniciar_agente_rol "PM" "$pm_pane" "$PM_KIND"
+iniciar_agente_rol "WK" "$wk_pane" "$WK_KIND"
+iniciar_agente_rol "RV" "$rv_pane" "$RV_KIND"
+
+enviar_kickoff
+
+# 12. Salida final
+cat <<EOF
+Workspace ID: $ws_id ($ws_label)
+Tabs y roles:
+  - pm: PM-${ticket} ($agent_pm) en $pm_pane
+  - wk: WK-${ticket} ($agent_wk) en $wk_pane
+  - rv: RV-${ticket} ($agent_rv) en $rv_pane
+Comando para adjuntarte:
+  herdr workspace focus $ws_id && herdr
+EOF
