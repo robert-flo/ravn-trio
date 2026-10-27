@@ -25,6 +25,8 @@ source "$PROJECT_DIR/lib/trio_project.sh"
 source "$PROJECT_DIR/lib/trio_config.sh"
 # shellcheck disable=SC1091
 source "$PROJECT_DIR/lib/trio_herdr.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/trio_agy.sh"
 
 mostrar_uso() {
     cat <<'EOF'

@@ -45,6 +45,11 @@ enviar_kickoff() {
         "$trio_status" --dry-run "$trio_dir" en-curso plan
         return 0
     fi
+    if ! esperar_agente_listo "$agent_pm"; then
+        print_warn "${agent_pm} no quedó listo a tiempo; no envío el arranque." >&2
+        print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}" >&2
+        return 0
+    fi
     local out
     if ! out="$(herdr agent prompt "$agent_pm" "$texto" 2>&1)"; then
         print_warn "no se pudo enviar el arranque a ${agent_pm}: ${out}" >&2
