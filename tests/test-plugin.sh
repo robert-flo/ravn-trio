@@ -30,4 +30,9 @@ grep -q 'pm-pj-demo-9' <<<"$out" || fallo "ticket desde la selección"
 if HERDR_PLUGIN_CONTEXT_JSON="{\"pane\":{\"cwd\":\"$tmp/pj-demo\"}}" "$aqui/runtime/plugin/new-trio" >/dev/null 2>&1; then
     fallo "sin ticket debe fallar"
 fi
+# URL de un issue de un miembro: va como --repo y se lee en ese repo.
+git -C "$tmp/pj-demo" remote add origin https://github.com/robert-flo/pj-demo.git
+git init -q "$tmp/pj-demo/rf-miembro" && git -C "$tmp/pj-demo/rf-miembro" remote add origin https://github.com/robert-flo/miembro.git
+out="$(HERDR_PLUGIN_CONTEXT_JSON="{\"pane\":{\"cwd\":\"$tmp/pj-demo\"},\"clicked_url\":\"https://github.com/robert-flo/miembro/issues/5\"}" "$aqui/runtime/plugin/new-trio" 2>&1)"
+grep -q 'trio pj-demo/miembro#5' <<<"$out" || fallo "URL de miembro → --repo: $out"
 echo "OK plugin"
