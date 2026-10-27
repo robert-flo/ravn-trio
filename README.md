@@ -61,7 +61,7 @@ pj-trio [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo
 
 En lugar de dividir un único tab en paneles pequeños, `pj-trio` crea o reutiliza tres tabs en herdr a pantalla completa dentro del workspace, garantizando que cada agente tenga el espacio completo de terminal sin splits:
 
-- **pm**: Tab raíz para la coordinación y gestión del ticket. Panel etiquetado como `PM-<ticket>`, con agente `pm-<proyecto>-<ticket>`.
+- **pm**: Tab raíz para la coordinación y gestión del ticket. Panel etiquetado como `PM-<ticket>`, con agente `pm-<miembro corto>-<ticket>`.
 - **wk**: Tab dedicado a la implementación de cambios y código. Panel etiquetado como `WK-<ticket>`, con agente `wk-<proyecto>-<ticket>`.
 - **rv**: Tab dedicado a la revisión técnica y validación de entregas. Panel etiquetado como `RV-<ticket>`, con agente `rv-<proyecto>-<ticket>`.
 
@@ -113,8 +113,8 @@ Si ejecutás `pj-trio` una segunda vez con los mismos argumentos:
 
 ### El PM maneja a WK y RV (#60)
 
-- **Nombres por proyecto y ticket:** los agentes de herdr se llaman `pm-<proyecto>-<ticket>`, `wk-<proyecto>-<ticket>` y `rv-<proyecto>-<ticket>` (minúsculas), así podés correr varios tríos del mismo proyecto a la vez. Si ese ticket ya tiene su trío corriendo, `pj-trio` avisa y no lo duplica.
-- **Arranque automático:** tras abrir los tabs, `pj-trio` renderiza `trio-pm-prompt.md` y lo envía con `herdr agent prompt pm-<proyecto>-<ticket> "…"`. El marcador es `<proyecto>/.trio/<ticket>/status.json`: si existe, no se reenvía (idempotente). Si el envío falla, pegá la salida de `pj-trio --print-kickoff …`.
+- **Nombres de agente:** `pm|wk|rv-<miembro corto>-<ticket>` (o `<proyecto>` sin `--repo`), en minúsculas y saneados para herdr (≤32, `^[a-z][a-z0-9_-]*$`). Se quitan los prefijos `pj-domina-`, `rf-`, `fo-` (`rf-pj-domina-rf-git-setup` #3 → `pm-git-setup-3`); si aún no cabe se trunca y se agrega un hash de 4 caracteres. Es determinista: si ese ticket ya tiene su trío corriendo, `pj-trio` avisa y no lo duplica.
+- **Arranque automático:** tras abrir los tabs, `pj-trio` renderiza `trio-pm-prompt.md` y lo envía con `herdr agent prompt pm-<miembro corto>-<ticket> "…"`. El marcador es `<proyecto>/.trio/<ticket>/status.json`: si existe, no se reenvía (idempotente). Si el envío falla, pegá la salida de `pj-trio --print-kickoff …`.
 - **Handoff único:** `<proyecto>/.trio/<ticket>/` con `plan.md`, `wk.md`, `rv.md` y `status.json`, commiteado en el meta-repo; nombra solo roles y nunca se duplica en los repos miembros.
 - **El PM pinguea** a WK y RV con `herdr agent prompt`, espera con `herdr agent wait … --timeout 600000` (reintenta si falla) y confirma con `herdr agent read` más el archivo de entrega.
 - **Merge:** tras `APRUEBO <sha>` de RV, el PM mergea con `gh pr merge --squash --delete-branch --match-head-commit <sha>` sin esperar otra orden.

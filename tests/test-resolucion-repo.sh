@@ -35,7 +35,7 @@ done
 
 out="$(cd / && "$aqui/pj-trio" --dry-run pj-ravn 4 --repo pj-domina-rf-git-setup-arch 2>&1)"
 grep -q 'Workspace label: trio pj-ravn/pj-domina-rf-git-setup-arch#4' <<<"$out" || fallo "label con nombres canónicos: $out"
-grep -q 'herdr agent start "pm-pj-ravn-pj-domina-rf-git-setup-arch-4"' <<<"$out" || fallo "agente por miembro y ticket"
+grep -q 'herdr agent start "pm-git-setup-arch-4"' <<<"$out" || fallo "agente por miembro y ticket"
 out="$(cd / && "$aqui/pj-trio" --dry-run pj-ravn 4 --repo robert-flo/pj-domina-rf-git-setup 2>&1)"
 grep -q 'Workspace label: trio pj-ravn/pj-domina-rf-git-setup#4' <<<"$out" || fallo "dueño/nombre"
 
@@ -49,3 +49,20 @@ grep -q 'ambiguo' <<<"$out" || fallo "mensaje de ambiguo"
 if out="$(cd / && "$aqui/pj-trio" --print-kickoff pj-ravn 1 --repo no-existe 2>&1)"; then fallo "aceptó ausente"; fi
 grep -q 'no se encontró el repositorio miembro' <<<"$out" || fallo "mensaje de ausente"
 echo "OK resolución"
+
+# Nombres de agente válidos para herdr (^[a-z][a-z0-9_-]{0,31}$): caso real.
+out="$(cd / && "$aqui/pj-trio" --dry-run "$raiz/2026-10-26-robert-flo-pj-ravn" 3 --repo "$raiz/2026-10-26-robert-flo-pj-ravn/rf-pj-domina-rf-git-setup" 2>&1)"
+for r in pm wk rv; do
+    grep -q "herdr agent start \"$r-git-setup-3\"" <<<"$out" || fallo "nombre corto $r: $out"
+done
+grep -q 'herdr agent prompt "pm-git-setup-3"' <<<"$out" || fallo "prompt usa el mismo nombre"
+# Largo: truncado + hash, determinista y único.
+clon "$raiz/2026-10-26-robert-flo-pj-ravn/rf-un-miembro-con-nombre-larguisimo-a" un-miembro-con-nombre-larguisimo-a
+clon "$raiz/2026-10-26-robert-flo-pj-ravn/rf-un-miembro-con-nombre-larguisimo-b" un-miembro-con-nombre-larguisimo-b
+na() { (cd / && "$aqui/pj-trio" --dry-run pj-ravn 12345 --repo "$1" 2>&1) | sed -n 's/.*herdr agent start "\(pm-[^"]*\)".*/\1/p'; }
+a="$(na un-miembro-con-nombre-larguisimo-a)"; b="$(na un-miembro-con-nombre-larguisimo-b)"
+for n in "$a" "$b"; do
+    [[ "$n" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || fallo "nombre inválido: '$n'"
+done
+[[ "$a" != "$b" ]] || fallo "hash no distingue miembros: $a"
+[[ "$a" == "$(na un-miembro-con-nombre-larguisimo-a)" ]] || fallo "no determinista"
