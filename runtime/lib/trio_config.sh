@@ -73,6 +73,7 @@ renderizar_kickoff() {
     t="${t//\{\{PROYECTO\}\}/$project_name}"
     t="${t//\{\{PROYECTO_DIR\}\}/$project_dir}"
     t="${t//\{\{TICKET\}\}/$ticket}"
+    t="${t//\{\{TICKET_REPO\}\}/${ticket_repo:-}}"
     t="${t//\{\{MIEMBRO_DIR\}\}/$miembro_dir}"
     t="${t//\{\{TRIO_DIR\}\}/$trio_dir}"
     t="${t//\{\{AGENTE_PM\}\}/$agent_pm}"

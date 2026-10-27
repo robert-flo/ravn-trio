@@ -52,7 +52,7 @@ pj-trio [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo
 
 - `<proyecto>`: Ruta al checkout git del proyecto meta (`pj-*`) o nombre del directorio. Si pasás únicamente el nombre, se resuelve contra la variable de entorno `$PJ_TRIO_ROOT`, o por defecto contra el directorio padre de `$PWD` o `/z-drive/tries`.
 - `<ticket>`: Identificador del issue o ticket a trabajar (por ejemplo `18` o `999`).
-- `--repo <miembro>`: Repositorio miembro opcional (hermano del proyecto meta, subdirectorio o ruta absoluta). Se añade al espacio de trabajo del agente mediante `--add-dir`.
+- `--repo <miembro>`: Repositorio miembro opcional, donde vive el issue. Acepta ruta, nombre del directorio, nombre del repo en GitHub (`pj-domina-rf-git-setup` o `robert-flo/pj-domina-rf-git-setup`) o nombre corto único (`rf-git-setup`). Se busca siempre igual, sin depender de `$PWD`: subdirectorios del proyecto (layout de try-clone, `rf-<nombre>`), hermanos y las raíces `$PJ_TRIO_ROOTS` (default `/z-drive/tries`, con el prefijo de fecha de `try clone`). El PM lee el issue con `gh issue view <ticket> -R <dueño>/<miembro>` y el handoff/agentes usan la clave `<miembro>-<ticket>` (no choca el #4 de dos miembros). Se añade al agente mediante `--add-dir`.
 - `--dry-run`: Muestra los comandos y la topología sin aplicarlos.
 - `--no-kickoff`: No envía el prompt de arranque al PM.
 - `--print-kickoff`: Imprime el prompt de arranque renderizado y sale (para pegarlo a mano).
@@ -72,6 +72,8 @@ El directorio de trabajo (`cwd`) para los tres tabs es la carpeta del proyecto m
 La etiqueta del espacio de trabajo se genera automáticamente:
 - Sin `--repo`: `trio <proyecto>#<ticket>`
 - Con `--repo`: `trio <proyecto>/<miembro>#<ticket>`
+
+`<proyecto>` sale de `proyecto:` en `proyecto.yml` (o del remoto origin) y `<miembro>` del remoto origin, así que los clones con fecha de `try clone` no ensucian las etiquetas.
 
 ### Configuración de Kinds por Rol
 

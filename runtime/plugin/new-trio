@@ -19,8 +19,10 @@ avisar() {
 # Ticket: URL de issue clicada, si no el texto seleccionado (número o #número).
 url="${HERDR_PLUGIN_CLICKED_URL:-$(campo '.clicked_url')}"
 ticket="${PJ_TRIO_TICKET:-}"
-if [[ -z "$ticket" && "$url" =~ /issues/([0-9]+)$ ]]; then
-    ticket="${BASH_REMATCH[1]}"
+url_repo=""
+if [[ -z "$ticket" && "$url" =~ github\.com/([^/]+)/([^/]+)/issues/([0-9]+)$ ]]; then
+    url_repo="${BASH_REMATCH[2]}"
+    ticket="${BASH_REMATCH[3]}"
 fi
 if [[ -z "$ticket" ]]; then
     sel="$(campo '.selected_text // .selection.text')"
@@ -55,4 +57,12 @@ if [[ -n "${HERDR_BIN_PATH:-}" ]]; then
 fi
 extra=()
 read -ra extra <<<"${PJ_TRIO_PLUGIN_ARGS:-}"
+# El issue vive en el repo de la URL: si no es el meta-repo, va como --repo
+# (pj-trio lo resuelve por nombre de remoto, aunque el clon tenga prefijo).
+proyecto_repo="$(git -C "$proyecto" remote get-url origin 2>/dev/null || true)"
+proyecto_repo="${proyecto_repo%.git}"
+proyecto_repo="${proyecto_repo##*/}"
+if [[ -n "$url_repo" && "$url_repo" != "$proyecto_repo" ]]; then
+    extra+=(--repo "$url_repo")
+fi
 exec "$pj_trio" "${extra[@]}" "$proyecto" "$ticket"
