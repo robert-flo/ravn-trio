@@ -209,9 +209,36 @@ trio_nombres() {
     miembro_dir="${repo_path:-$project_dir}"
 }
 
-# 4b. Nombres de agente por proyecto y ticket (permite varios tríos por proyecto)
+# 4b. Nombres de agente: <rol>-<miembro corto>-<ticket>. herdr exige
+# ^[a-z][a-z0-9_-]{0,31}$, así que se sanea, se quitan prefijos comunes
+# (pj-domina-, rf-, fo-) y, si aún no cabe, se trunca y se agrega un hash de
+# 4 caracteres del nombre completo. Determinista: mismo trío → mismo nombre.
+sanear_nombre() {
+    echo "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_\n-' '-'
+}
+
 nombre_agente() {
-    local t
-    t="$(echo "${ticket_key:-$ticket}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')"
-    echo "${1}-${project_name}-${t}" | tr '[:upper:]' '[:lower:]'
+    local rol base t nombre max hash
+    rol="$(sanear_nombre "$1")"
+    base="$(sanear_nombre "${repo_name:-$project_name}")"
+    local prev=""
+    while [[ "$base" != "$prev" ]]; do
+        prev="$base"
+        base="${base#pj-domina-}"; base="${base#rf-}"; base="${base#fo-}"
+    done
+    [[ -n "$base" ]] || base="$(sanear_nombre "$project_name")"
+    t="$(sanear_nombre "$ticket")"
+    nombre="${rol}-${base}-${t}"
+    if (( ${#nombre} > 32 )); then
+        hash="$(printf '%s' "${project_name}/${repo_name}#${ticket}" | sha1sum | cut -c1-4)"
+        max=$(( 32 - ${#rol} - ${#t} - 7 ))   # 3 guiones + 4 de hash
+        if (( max < 1 )); then
+            nombre="${rol:0:22}-${hash}-${t:0:4}"
+            nombre="${nombre:0:32}"
+        else
+            base="${base:0:max}"; base="${base%-}"
+            nombre="${rol}-${base}-${hash}-${t}"
+        fi
+    fi
+    echo "$nombre"
 }
