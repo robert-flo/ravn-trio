@@ -112,13 +112,10 @@ trio_buscar_repo() {
     return 1
 }
 
-trio_resolver_proyecto() {
-    # 2. Resolución del directorio del proyecto meta: ruta, o nombre buscado en
-    # $PJ_TRIO_ROOT(S) (default /z-drive/tries) y el padre de $PWD, también con
-    # el prefijo de fecha de `try clone` (AAAA-MM-DD-<dueño>-<nombre>).
+# Busca el proyecto meta por ruta o nombre en las raíces y el padre de $PWD;
+# deja el resultado en project_dir (vacío si no está).
+_trio_buscar_proyecto() {
     project_dir=""
-    local -a raices=()
-    mapfile -t raices < <(trio_raices)
     if [[ -d "$proyecto_arg" ]]; then
         project_dir="$(cd "$proyecto_arg" && pwd)"
     else
@@ -143,6 +140,67 @@ trio_resolver_proyecto() {
             done
         fi
     fi
+
+}
+
+# Clona con try-clone el meta-repo que falta (solo ése) y vuelve a resolver.
+# PJ_TRIO_CLONE_CMD: {root} y {url}; default `try exec --path {root} clone {url} | bash`.
+# PJ_TRIO_OWNER: dueño cuando se pasa solo el nombre (default robert-flo).
+# PJ_TRIO_NO_CLONE=1 lo desactiva.
+_trio_clonar_proyecto() {
+    [[ "${PJ_TRIO_NO_CLONE:-0}" == 1 ]] && return 1
+    local arg="$proyecto_arg" slug raiz url cmd
+    [[ "$arg" == /* || "$arg" == .* || "$arg" == ~* ]] && return 1
+    if [[ "$arg" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+        slug="$arg"
+    elif [[ "$arg" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+        slug="${PJ_TRIO_OWNER:-robert-flo}/$arg"
+    else
+        return 1
+    fi
+    # dueño/nombre que ya está clonado con otro nombre de directorio.
+    if [[ "$arg" == */* ]]; then
+        proyecto_arg="${slug#*/}"
+        _trio_buscar_proyecto
+        [[ -n "$project_dir" ]] && return 0
+        proyecto_arg="$arg"
+    fi
+    raiz="${raices[0]:-}"
+    if [[ -z "$raiz" ]]; then
+        # shellcheck disable=SC2086 # Lista separada por espacios a propósito.
+        set -- ${PJ_TRIO_ROOT:-} ${PJ_TRIO_ROOTS:-/z-drive/tries}
+        raiz="${1:-/z-drive/tries}"
+    fi
+    url="https://github.com/${slug}.git"
+    local defecto='try exec --path {root} clone {url} | bash'
+    cmd="${PJ_TRIO_CLONE_CMD:-$defecto}"
+    cmd="${cmd//\{root\}/$(printf '%q' "$raiz")}"
+    cmd="${cmd//\{url\}/$(printf '%q' "$url")}"
+    print_info "El proyecto '$proyecto_arg' no está clonado: clonando $slug en $raiz con try-clone…" >&2
+    if [[ "${dry_run:-0}" -eq 1 ]]; then
+        print_info "(dry-run) se ejecutaría: $cmd" >&2
+        return 1
+    fi
+    if ! bash -c "$cmd" >&2; then
+        print_error "falló el clon de $slug ($cmd)" >&2
+        return 1
+    fi
+    mapfile -t raices < <(trio_raices)
+    [[ " ${raices[*]} " == *" $raiz "* ]] || raices=("$raiz" "${raices[@]}")
+    proyecto_arg="${slug#*/}"
+    _trio_buscar_proyecto
+    [[ -n "$project_dir" ]]
+}
+
+trio_resolver_proyecto() {
+    # 2. Resolución del directorio del proyecto meta: ruta, o nombre buscado en
+    # $PJ_TRIO_ROOT(S) (default /z-drive/tries) y el padre de $PWD, también con
+    # el prefijo de fecha de `try clone` (AAAA-MM-DD-<dueño>-<nombre>).
+    project_dir=""
+    local -a raices=()
+    mapfile -t raices < <(trio_raices)
+    _trio_buscar_proyecto
+    [[ -n "$project_dir" ]] || _trio_clonar_proyecto || true
 
     if [[ -z "$project_dir" ]]; then
         print_error "no se encontró el directorio del proyecto '$proyecto_arg'" >&2
