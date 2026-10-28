@@ -16,14 +16,22 @@ trio_notificar() {
 # _trio_pausa_manual <agente>: pausa interactiva sin timeout. Lee una tecla del
 # tty del usuario (TRIO_READY_TTY permite apuntar esa entrada a otra parte en
 # las pruebas) y continúa con cualquier pulsación, sin re-chequear la pantalla.
+# Abre el fd del tty antes de avisar: sin entrada de dónde leer la tecla no
+# anuncia la pausa (cae al sondeo del llamador).
 # 0 si llegó la tecla; 1 si no hay entrada de dónde leerla.
 _trio_pausa_manual() {
-    local agente="$1" tty="${TRIO_READY_TTY:-/dev/tty}"
-    print_warn "${agente}: esperando una tecla tuya (Enter) para continuar..." >&2
-    if ! { read -rn1 <"$tty"; } 2>/dev/null; then
+    local agente="$1" tty="${TRIO_READY_TTY:-/dev/tty}" fd
+    if ! { exec {fd}<"$tty"; } 2>/dev/null; then
         print_error "no pude leer una tecla de ${tty}; sigo sin la pausa manual." >&2
         return 1
     fi
+    print_warn "${agente}: esperando una tecla tuya (Enter) para continuar..." >&2
+    if ! { read -rn1 -u "$fd"; } 2>/dev/null; then
+        exec {fd}<&-
+        print_error "no pude leer una tecla de ${tty}; sigo sin la pausa manual." >&2
+        return 1
+    fi
+    exec {fd}<&-
     return 0
 }
 

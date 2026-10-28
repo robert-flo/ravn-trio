@@ -49,8 +49,25 @@ sleep 2
 estado_ps="$(ps -o stat= -p "$pid" 2>/dev/null || true)"
 [[ "$estado_ps" == *Z* || -z "$estado_ps" ]] \
   && fallo "con diálogo debería seguir esperando la tecla, no vencer solo"
+# El wait queda acotado: una regresión que tras la tecla re-entre en la pausa
+# (o vuelva a sondear) debe hacer fallar la prueba, no colgar el job.
+reads_tecla="$(cat "$tmp/count")"
 printf '\n' >"$tmp/tty"
+listo=0
+for _ in $(seq 1 50); do
+    estado_ps="$(ps -o stat= -p "$pid" 2>/dev/null || true)"
+    [[ -z "$estado_ps" || "$estado_ps" == *Z* ]] && { listo=1; break; }
+    sleep 0.1
+done
+[[ "$listo" -eq 1 ]] || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fallo "tras la tecla debería continuar, no re-entrar en la pausa"
+}
 wait "$pid" || fallo "tras la tecla debería continuar"
+# Tras la tecla no hay más sondeos (ni re-lecturas del diálogo) ni otra pausa.
+[[ "$(cat "$tmp/count")" -eq "$reads_tecla" ]] || fallo "tras la tecla no se debería volver a sondear"
+[[ "$(grep -c "esperando una tecla" "$tmp/err")" -eq 1 ]] || fallo "la pausa debería avisar una sola vez"
 [[ "$(wc -l <"$tmp/notify")" -eq 1 ]] || fallo "debería notificar una sola vez"
 grep -q "pm-x" "$tmp/notify" || fallo "el aviso debería nombrar al agente"
 grep -qi "enter" "$tmp/err" || fallo "la pausa debería pedir Enter"
@@ -67,6 +84,9 @@ timeout 10 env STUB_STATUS=working TRIO_READY_TTY="$tmp/tty" TRIO_READY_TIMEOUT=
 rm -f "$tmp/count"
 rc4=0
 timeout 10 env STUB_TRUST_READS=999 TRIO_READY_TTY="$tmp/no-existe" TRIO_READY_TIMEOUT=1 \
-  bash -c 'esperar_agente_listo pm-x' 2>/dev/null || rc4=$?
+  bash -c 'esperar_agente_listo pm-x' 2>"$tmp/err4" || rc4=$?
 [[ "$rc4" -ne 124 ]] || fallo "sin tty no debería colgarse"
+# Sin tty cae al sondeo: anuncia que no puede leer la tecla y no promete la pausa.
+grep -q "no pude leer" "$tmp/err4" || fallo "sin tty debería avisar que no puede leer la tecla"
+grep -q "esperando una tecla" "$tmp/err4" && fallo "sin tty no debería anunciar la pausa"
 echo "OK espera de agente"
