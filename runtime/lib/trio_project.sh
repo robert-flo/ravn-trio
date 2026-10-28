@@ -112,13 +112,10 @@ trio_buscar_repo() {
     return 1
 }
 
-trio_resolver_proyecto() {
-    # 2. Resolución del directorio del proyecto meta: ruta, o nombre buscado en
-    # $PJ_TRIO_ROOT(S) (default /z-drive/tries) y el padre de $PWD, también con
-    # el prefijo de fecha de `try clone` (AAAA-MM-DD-<dueño>-<nombre>).
+# Busca el proyecto meta por ruta o nombre en las raíces y el padre de $PWD;
+# deja el resultado en project_dir (vacío si no está).
+_trio_buscar_proyecto() {
     project_dir=""
-    local -a raices=()
-    mapfile -t raices < <(trio_raices)
     if [[ -d "$proyecto_arg" ]]; then
         project_dir="$(cd "$proyecto_arg" && pwd)"
     else
@@ -144,6 +141,74 @@ trio_resolver_proyecto() {
         fi
     fi
 
+}
+
+# Clona UN repo (dueño/nombre) en <raíz> con PJ_TRIO_CLONE_CMD; en dry-run
+# solo muestra el comando y falla.
+_trio_clonar() {
+    [[ "${PJ_TRIO_NO_CLONE:-0}" == 1 ]] && return 1
+    local url="https://github.com/$1.git" cmd defecto='try exec --path {root} clone {url} | bash'
+    cmd="${PJ_TRIO_CLONE_CMD:-$defecto}"
+    cmd="${cmd//\{root\}/$(printf '%q' "$2")}"
+    cmd="${cmd//\{url\}/$(printf '%q' "$url")}"
+    if [[ "${dry_run:-0}" -eq 1 ]]; then
+        print_info "(dry-run) se ejecutaría: $cmd" >&2
+        return 1
+    fi
+    if ! bash -c "$cmd" >&2; then
+        print_error "falló el clon de $1 ($cmd)" >&2
+        return 1
+    fi
+}
+
+# Clona con try-clone el meta-repo que falta (solo ése) y vuelve a resolver.
+# PJ_TRIO_CLONE_CMD: {root} y {url}; default `try exec --path {root} clone {url} | bash`.
+# PJ_TRIO_OWNER: dueño cuando se pasa solo el nombre (default robert-flo).
+# PJ_TRIO_NO_CLONE=1 lo desactiva.
+_trio_clonar_proyecto() {
+    [[ "${PJ_TRIO_NO_CLONE:-0}" == 1 ]] && return 1
+    local arg="$proyecto_arg" slug raiz
+    [[ "$arg" == /* || "$arg" == .* || "$arg" == ~* ]] && return 1
+    if [[ "$arg" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+        slug="$arg"
+    elif [[ "$arg" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+        slug="${PJ_TRIO_OWNER:-robert-flo}/$arg"
+    else
+        return 1
+    fi
+    # dueño/nombre que ya está clonado con otro nombre de directorio.
+    if [[ "$arg" == */* ]]; then
+        proyecto_arg="${slug#*/}"
+        _trio_buscar_proyecto
+        [[ -n "$project_dir" ]] && return 0
+        proyecto_arg="$arg"
+    fi
+    raiz="${raices[0]:-}"
+    if [[ -z "$raiz" ]]; then
+        # shellcheck disable=SC2086 # Lista separada por espacios a propósito.
+        set -- ${PJ_TRIO_ROOT:-} ${PJ_TRIO_ROOTS:-/z-drive/tries}
+        raiz="${1:-/z-drive/tries}"
+    fi
+    print_info "El proyecto '$proyecto_arg' no está clonado: clonando $slug en $raiz con try-clone…" >&2
+    _trio_clonar "$slug" "$raiz" || return 1
+    mapfile -t raices < <(trio_raices)
+    [[ " ${raices[*]} " == *" $raiz "* ]] || raices=("$raiz" "${raices[@]}")
+    proyecto_arg="${slug#*/}"
+    _trio_buscar_proyecto
+    [[ -n "$project_dir" ]]
+}
+
+trio_resolver_proyecto() {
+    # 2. Resolución del directorio del proyecto meta: ruta, o nombre buscado en
+    # $PJ_TRIO_ROOT(S) (default /z-drive/tries) y el padre de $PWD, también con
+    # el prefijo de fecha de `try clone` (AAAA-MM-DD-<dueño>-<nombre>).
+    project_dir=""
+    local -a raices=()
+    mapfile -t raices < <(trio_raices)
+    while [[ "$proyecto_arg" == *[.,] ]]; do proyecto_arg="${proyecto_arg%[.,]}"; done
+    _trio_buscar_proyecto
+    [[ -n "$project_dir" ]] || _trio_clonar_proyecto || true
+
     if [[ -z "$project_dir" ]]; then
         print_error "no se encontró el directorio del proyecto '$proyecto_arg'" >&2
         print_info "Pista: pasá una ruta existente, cloná el meta-repo (try clone) o configurá \$PJ_TRIO_ROOTS (default /z-drive/tries)." >&2
@@ -162,6 +227,8 @@ trio_resolver_proyecto() {
     repo_name=""
     repo_slug=""
     if [[ -n "$repo_arg" ]]; then
+        # Puntuación final tipeada por error (`--repo foo.` o `foo,`).
+        while [[ "$repo_arg" == *[.,] ]]; do repo_arg="${repo_arg%[.,]}"; done
         local buscado="${repo_arg##*/}" rc=0
         [[ "$repo_arg" == */* && -d "$repo_arg" ]] && buscado="$repo_arg"
         repo_path="$(trio_buscar_repo "$buscado" "$project_dir" "$(dirname "$project_dir")" "${raices[@]}")" || rc=$?
@@ -169,9 +236,24 @@ trio_resolver_proyecto() {
             print_error "el repositorio miembro '$repo_arg' es ambiguo (candidatos arriba); pasá el nombre completo o la ruta." >&2
             exit 1
         elif ((rc != 0)) || [[ -z "$repo_path" ]]; then
-            print_error "no se encontró el repositorio miembro '$repo_arg'" >&2
-            print_info "Pista: pasá la ruta, el nombre del repo en GitHub o cloná el miembro (try clone) en ${raices[*]:-/z-drive/tries}." >&2
-            exit 1
+            local mslug="$repo_arg"
+            [[ "$mslug" == */* ]] || mslug="${project_slug%%/*}"/"$repo_arg"
+            [[ "$mslug" == /* ]] && mslug="${PJ_TRIO_OWNER:-robert-flo}/$repo_arg"
+            if command -v gh >/dev/null 2>&1 && [[ "$repo_arg" != /* ]]; then
+                if gh repo view "$mslug" --json name >/dev/null 2>&1; then
+                    print_info "$mslug existe en GitHub pero no está clonado: clonándolo en $project_dir con try-clone…" >&2
+                    if _trio_clonar "$mslug" "$project_dir"; then
+                        repo_path="$(trio_buscar_repo "${mslug#*/}" "$project_dir" "$(dirname "$project_dir")" "${raices[@]}")" || repo_path=""
+                    fi
+                else
+                    print_error "el repositorio $mslug no existe en GitHub (o no tenés acceso): revisá el nombre." >&2
+                fi
+            fi
+            if [[ -z "$repo_path" ]]; then
+                print_error "no se encontró el repositorio miembro '$repo_arg'" >&2
+                print_info "Pista: pasá la ruta, el nombre del repo en GitHub o cloná el miembro (try clone) en ${raices[*]:-/z-drive/tries}." >&2
+                exit 1
+            fi
         fi
         repo_name="$(trio_nombre_repo "$repo_path")"
         repo_slug="$(trio_slug_remoto "$repo_path")"
