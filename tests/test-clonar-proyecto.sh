@@ -24,7 +24,8 @@ chmod +x "$tmp/bin/try"
 cat > "$tmp/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 [[ "$1 $2" == "repo view" ]] || exit 1
-grep -qx "$3" <<<"${GH_EXISTE:-}"
+[[ -n "${GH_OFFLINE:-}" ]] && { echo "error connecting to api.github.com" >&2; exit 1; }
+grep -qx "$3" <<<"${GH_EXISTE:-}" || { echo "GraphQL: Could not resolve to a Repository with the name '$3'." >&2; exit 1; }
 STUB
 chmod +x "$tmp/bin/gh"
 export PATH="$tmp/bin:/usr/bin:/bin" TRY_LOG="$tmp/try.log"
@@ -64,4 +65,11 @@ if out="$(cd / && "$aqui/pj-trio" --print-kickoff pj-domina 3 --repo no-existe, 
 grep -q 'robert-flo/no-existe no existe en GitHub' <<<"$out" || fallo "mensaje inexistente: $out"
 grep -q "no se encontró el repositorio miembro 'no-existe'" <<<"$out" || fallo "coma no recortada: $out"
 [[ "$(wc -l < "$TRY_LOG")" == 2 ]] || fallo "clonó un inexistente"
+# gh sin red: error distinto de «no existe».
+if out="$(cd / && GH_OFFLINE=1 "$aqui/pj-trio" --print-kickoff pj-domina 3 --repo otro 2>&1)"; then fallo "aceptó sin red"; fi
+grep -q 'no pude consultar GitHub por robert-flo/otro' <<<"$out" || fallo "mensaje sin red: $out"
+! grep -q 'no existe en GitHub' <<<"$out" || fallo "sin red reportado como inexistente"
+# pipefail: si try falla, el clon falla aunque bash lea un script vacío.
+if out="$(cd / && PJ_TRIO_CLONE_CMD='false {root} {url} | cat' "$aqui/pj-trio" --print-kickoff pj-roto 1 2>&1)"; then fallo "pipefail"; fi
+grep -q 'falló el clon de robert-flo/pj-roto' <<<"$out" || fallo "mensaje pipefail: $out"
 echo "OK clonar proyecto"

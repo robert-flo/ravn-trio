@@ -155,7 +155,7 @@ _trio_clonar() {
         print_info "(dry-run) se ejecutaría: $cmd" >&2
         return 1
     fi
-    if ! bash -c "$cmd" >&2; then
+    if ! bash -o pipefail -c "$cmd" >&2; then
         print_error "falló el clon de $1 ($cmd)" >&2
         return 1
     fi
@@ -240,7 +240,11 @@ trio_resolver_proyecto() {
             [[ "$mslug" == */* ]] || mslug="${project_slug%%/*}"/"$repo_arg"
             [[ "$mslug" == /* ]] && mslug="${PJ_TRIO_OWNER:-robert-flo}/$repo_arg"
             if command -v gh >/dev/null 2>&1 && [[ "$repo_arg" != /* ]]; then
-                if gh repo view "$mslug" --json name >/dev/null 2>&1; then
+                local gh_err gh_rc=0
+                gh_err="$(gh repo view "$mslug" --json name 2>&1 >/dev/null)" || gh_rc=$?
+                if ((gh_rc != 0)) && ! grep -qiE 'could not resolve to a repository|not found|404' <<<"$gh_err"; then
+                    print_error "no pude consultar GitHub por $mslug (¿sin red o gh sin sesión?): ${gh_err%%$'\n'*}" >&2
+                elif ((gh_rc == 0)); then
                     print_info "$mslug existe en GitHub pero no está clonado: clonándolo en $project_dir con try-clone…" >&2
                     if _trio_clonar "$mslug" "$project_dir"; then
                         repo_path="$(trio_buscar_repo "${mslug#*/}" "$project_dir" "$(dirname "$project_dir")" "${raices[@]}")" || repo_path=""
