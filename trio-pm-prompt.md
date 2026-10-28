@@ -30,10 +30,12 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
    `herdr agent prompt {{AGENTE_RV}} "Sos RV del ticket #{{TICKET}}. Revisá el PR <url> en head <sha> contra el ticket y {{TRIO_DIR}}/plan.md. Escribí {{TRIO_DIR}}/rv.md y comentá en el PR terminando en APRUEBO <sha> o BLOQUEO con motivos."`
    Esperá igual que con WK (wait + read + rv.md). Si falla, aplicá la sección Fallos.
 5. Si RV dice BLOQUEO, devolvéle los motivos a WK (paso 3) y repetí.
-6. Si RV dice APRUEBO <sha>, mergeá vos, sin esperar orden de Roberto:
-   `gh pr merge <pr> --squash --delete-branch --match-head-commit <sha>`
-   Si el head cambió, no mergees: volvé al paso 4.
-7. Cerrá: `{{TRIO_STATUS}} {{TRIO_DIR}} hecho cierre --pr <url> --head <sha>`, commit + push del meta-repo, y `git -C {{MIEMBRO_DIR}} worktree remove <ruta>`.
+6. Si RV dice APRUEBO <sha>, NO mergees: avisale a Roberto y frená. Escribí
+   `{{TRIO_STATUS}} {{TRIO_DIR}} needs-roberto merge --pr <url> --head <sha>`
+   El squash-merge lo ejecuta Roberto con su orden en chat sobre el PR listo:
+   `gh pr merge <pr> --squash --delete-branch --match-head-commit <sha>` (eso lo corre Roberto, no vos).
+   El head del PR no debe cambiar después del APRUEBO: el --match-head-commit de Roberto depende de ese sha. Si cambió después del APRUEBO, avisale a Roberto y volvé al paso 4.
+7. Cuando Roberto ordenó (o confirmó) el merge, cerrá: `{{TRIO_STATUS}} {{TRIO_DIR}} hecho cierre --pr <url> --head <sha>`, commit + push del meta-repo, y `git -C {{MIEMBRO_DIR}} worktree remove <ruta>`.
 
 ## Fallos: un reintento y aviso
 Un paso falló si: `herdr agent wait` da error o vence, el estado del agente (`herdr agent get <agente>`) es blocked, agent_prompt_stalled o unknown, el agente no aparece en `herdr agent list`, o queda idle sin su archivo de entrega (wk.md / rv.md). También cuenta un comando tuyo (push, gh) que falla.
@@ -45,4 +47,5 @@ Un paso falló si: `herdr agent wait` da error o vence, el estado del agente (`h
 
 ## Límites
 - Nunca `push --force`. Nunca respondas vos solo un diálogo de aprobación de otro agente.
+- Nunca mergees un PR por tu cuenta: el squash-merge lo ejecuta Roberto con su orden en chat (paso 6).
 - Si algo te supera, usá el paso 2 de Fallos y parate.
