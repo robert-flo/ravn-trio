@@ -156,7 +156,7 @@ if [[ "$dry_run" -eq 1 ]]; then
             if [[ -n "$repo_path" ]]; then
                 extra_args="$extra_args --add-dir \"$project_dir\""
             fi
-            if [[ "$role" == PM && "$k" == agy ]] && kickoff_pendiente; then
+            if [[ "$role" == PM && "$k" == agy && "$kickoff" -eq 1 ]]; then
                 extra_args="$extra_args -i \"Lee y segui al pie de la letra las instrucciones de arranque del archivo ${trio_dir}/kickoff.md\""
                 kickoff_en_arranque=1
             fi
