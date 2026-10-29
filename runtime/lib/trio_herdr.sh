@@ -25,6 +25,11 @@ fijar_identidad_git() {
 }
 
 # Envío del arranque al PM: una sola vez por ticket (marcador status.json).
+# kickoff_pendiente: 0 si hay que enviar el arranque al PM (una sola vez por ticket).
+kickoff_pendiente() {
+    [[ "$kickoff" -eq 1 && -n "$PM_KIND" && "${pm_duplicado:-0}" -eq 0 && ! -f "${trio_dir}/status.json" ]]
+}
+
 enviar_kickoff() {
     if [[ "$kickoff" -eq 0 || -z "$PM_KIND" ]]; then
         return 0
@@ -39,6 +44,16 @@ enviar_kickoff() {
     fi
     local texto
     texto="$(renderizar_kickoff)" || return 1
+    if [[ "${kickoff_en_arranque:-0}" -eq 1 ]]; then
+        # agy ya recibió el arranque con -i/--prompt-interactive al iniciar.
+        echo "Arranque enviado a ${agent_pm} al iniciar agy (-i, sesión interactiva)."
+        if [[ "$dry_run" -eq 1 ]]; then
+            "$trio_status" --dry-run "$trio_dir" en-curso plan
+        else
+            "$trio_status" "$trio_dir" en-curso plan
+        fi
+        return 0
+    fi
     if [[ "$dry_run" -eq 1 ]]; then
         echo "[dry-run] mkdir -p \"$trio_dir\""
         echo "[dry-run] herdr agent prompt \"$agent_pm\" \"<trio-pm-prompt.md renderizado>\""
@@ -189,7 +204,18 @@ iniciar_agente_rol() {
 
     local agent_args=(--agent "${role}-${project_name}")
     if [[ -n "$repo_path" ]]; then
-        agent_args+=(--add-dir "$repo_path")
+        # El pane abre en el miembro; el meta-repo se añade al workspace de agy.
+        agent_args+=(--add-dir "$project_dir")
+    fi
+    # agy 1.4.x: -i/--prompt-interactive envía el prompt inicial y sigue interactivo
+    # (https://antigravity.google/docs/cli/reference/). Evita depender de herdr agent prompt.
+    if [[ "$role" == PM && "$kind" == agy ]] && kickoff_pendiente; then
+        local texto_kickoff
+        if texto_kickoff="$(renderizar_kickoff)"; then
+            agent_args+=(-i "$texto_kickoff")
+            kickoff_en_arranque=1
+            echo "PM: arranco agy con el prompt de arranque (-i) para el ticket ${ticket}."
+        fi
     fi
 
     local start_output
