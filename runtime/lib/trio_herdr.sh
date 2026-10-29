@@ -25,11 +25,6 @@ fijar_identidad_git() {
 }
 
 # Envío del arranque al PM: una sola vez por ticket (marcador status.json).
-# kickoff_pendiente: 0 si hay que enviar el arranque al PM (una sola vez por ticket).
-kickoff_pendiente() {
-    [[ "$kickoff" -eq 1 && -n "$PM_KIND" && "${pm_duplicado:-0}" -eq 0 && ! -f "${trio_dir}/status.json" ]]
-}
-
 enviar_kickoff() {
     if [[ "$kickoff" -eq 0 || -z "$PM_KIND" ]]; then
         return 0
@@ -41,22 +36,24 @@ enviar_kickoff() {
         print_warn "${agent_pm} ya corre en otro pane; no envío el arranque ni escribo status.json." >&2
         return 0
     fi
-    if [[ -f "${trio_dir}/status.json" ]]; then
-        echo "Arranque ya enviado (existe ${trio_dir}/status.json); no se reenvía."
-        return 0
-    fi
-    local texto
-    texto="$(renderizar_kickoff)" || return 1
     if [[ "${kickoff_en_arranque:-0}" -eq 1 ]]; then
         # agy ya recibió el arranque con -i/--prompt-interactive al iniciar.
         echo "Arranque enviado a ${agent_pm} al iniciar agy (-i, sesión interactiva)."
-        if [[ "$dry_run" -eq 1 ]]; then
+        if [[ -f "${trio_dir}/status.json" ]]; then
+            echo "status.json ya existía; se conserva (el PM retoma desde ahí)."
+        elif [[ "$dry_run" -eq 1 ]]; then
             "$trio_status" --dry-run "$trio_dir" en-curso plan
         else
             "$trio_status" "$trio_dir" en-curso plan
         fi
         return 0
     fi
+    if [[ -f "${trio_dir}/status.json" ]]; then
+        echo "Arranque ya enviado (existe ${trio_dir}/status.json); no se reenvía."
+        return 0
+    fi
+    local texto
+    texto="$(renderizar_kickoff)" || return 1
     if [[ "$dry_run" -eq 1 ]]; then
         echo "[dry-run] mkdir -p \"$trio_dir\""
         echo "[dry-run] herdr agent prompt \"$agent_pm\" \"<trio-pm-prompt.md renderizado>\""
@@ -216,7 +213,12 @@ iniciar_agente_rol() {
     # (herdrdev/herdr src/app/agents.rs:159, error invalid_agent_argument): el
     # arranque va a un archivo y -i lleva solo una línea que apunta a él.
     local kickoff_pm=0
-    if [[ "$role" == PM && "$kind" == agy ]] && kickoff_pendiente; then
+    # Un PM recién lanzado no tiene contexto: recibe siempre el arranque, aunque
+    # exista status.json (p. ej. de un intento anterior en que el PM no arrancó).
+    if [[ "$role" == PM && "$kind" == agy && "$kickoff" -eq 1 ]]; then
+        if [[ -f "${trio_dir}/status.json" ]]; then
+            echo "PM: existe ${trio_dir}/status.json, pero el PM es nuevo: le paso el arranque igual."
+        fi
         local archivo_kickoff="${trio_dir}/kickoff.md"
         mkdir -p "$trio_dir"
         if renderizar_kickoff > "$archivo_kickoff"; then

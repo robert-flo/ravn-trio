@@ -32,7 +32,7 @@ grep -qi 'worktree add' <<<"$k" || fallo "worktree nuevo"
 # Idempotencia del arranque: con status.json presente no se reenvía.
 mkdir -p "$tmp/pj-demo/.trio/42" && echo '{}' > "$tmp/pj-demo/.trio/42/status.json"
 out="$("$aqui/pj-trio" --dry-run "$tmp/pj-demo" 42 2>&1)"
-grep -q 'no se reenvía' <<<"$out" || fallo "reenvío del arranque"
+grep -q 'se conserva' <<<"$out" || fallo "PM nuevo recibe arranque sin pisar status.json"
 
 grep -q 'needs-roberto' <<<"$k" || fallo "regla de fallo definitivo"
 grep -q -- '--notify' <<<"$k" || fallo "aviso notify-send"

@@ -3,7 +3,7 @@
 # `herdr plugin link /usr/share/ravn/trio` o desde el checkout.
 id = "ravn.trio"
 name = "ravn-trio"
-version = "0.1.5"
+version = "0.1.6"
 min_herdr_version = "0.7.0"
 description = "Trío PM/WK/RV en tabs de herdr (pj-trio)"
 platforms = ["linux"]
