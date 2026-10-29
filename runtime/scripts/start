@@ -157,7 +157,7 @@ if [[ "$dry_run" -eq 1 ]]; then
                 extra_args="$extra_args --add-dir \"$project_dir\""
             fi
             if [[ "$role" == PM && "$k" == agy ]] && kickoff_pendiente; then
-                extra_args="$extra_args -i \"<trio-pm-prompt.md renderizado>\""
+                extra_args="$extra_args -i \"Lee y segui al pie de la letra las instrucciones de arranque del archivo ${trio_dir}/kickoff.md\""
                 kickoff_en_arranque=1
             fi
             echo "[dry-run] herdr agent start \"$an\" --kind \"$k\" --pane \"<id_pane_${role_lower}>\" $extra_args"

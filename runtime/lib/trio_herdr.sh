@@ -34,6 +34,9 @@ enviar_kickoff() {
     if [[ "$kickoff" -eq 0 || -z "$PM_KIND" ]]; then
         return 0
     fi
+    if [[ "${pm_fallo_inicio:-0}" -eq 1 ]]; then
+        return 0
+    fi
     if [[ "${pm_duplicado:-0}" -eq 1 ]]; then
         print_warn "${agent_pm} ya corre en otro pane; no envío el arranque ni escribo status.json." >&2
         return 0
@@ -209,12 +212,17 @@ iniciar_agente_rol() {
     fi
     # agy 1.4.x: -i/--prompt-interactive envía el prompt inicial y sigue interactivo
     # (https://antigravity.google/docs/cli/reference/). Evita depender de herdr agent prompt.
+    # herdr 0.9.5 rechaza argumentos con caracteres de control (saltos de línea)
+    # (herdrdev/herdr src/app/agents.rs:159, error invalid_agent_argument): el
+    # arranque va a un archivo y -i lleva solo una línea que apunta a él.
+    local kickoff_pm=0
     if [[ "$role" == PM && "$kind" == agy ]] && kickoff_pendiente; then
-        local texto_kickoff
-        if texto_kickoff="$(renderizar_kickoff)"; then
-            agent_args+=(-i "$texto_kickoff")
-            kickoff_en_arranque=1
-            echo "PM: arranco agy con el prompt de arranque (-i) para el ticket ${ticket}."
+        local archivo_kickoff="${trio_dir}/kickoff.md"
+        mkdir -p "$trio_dir"
+        if renderizar_kickoff > "$archivo_kickoff"; then
+            agent_args+=(-i "Lee y segui al pie de la letra las instrucciones de arranque del archivo ${archivo_kickoff}")
+            kickoff_pm=1
+            echo "PM: arranco agy con -i apuntando al arranque en ${archivo_kickoff} (ticket ${ticket})."
         fi
     fi
 
@@ -222,7 +230,10 @@ iniciar_agente_rol() {
     if ! start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${agent_args[@]}" 2>&1)"; then
         # Si el agente requiere interacción o confirmación inicial (ej. prompts de bienvenida o permisos),
         # herdr reporta agent_not_ready. El proceso queda corriendo en el panel.
-        if ! echo "$start_output" | jq -e '.error.code == "agent_not_ready"' >/dev/null 2>&1; then
+        if echo "$start_output" | jq -e '.error.code == "agent_not_ready"' >/dev/null 2>&1; then
+            if [[ "$kickoff_pm" -eq 1 ]]; then kickoff_en_arranque=1; fi
+        else
+            if [[ "$role" == PM ]]; then pm_fallo_inicio=1; fi
             local err_msg
             err_msg="$(echo "$start_output" | jq -r '.error.message // empty' 2>/dev/null || true)"
             if [[ -n "$err_msg" ]]; then
@@ -230,6 +241,12 @@ iniciar_agente_rol() {
             else
                 print_warn "no se pudo iniciar automáticamente el agente para ${role}: ${start_output}" >&2
             fi
+            if [[ "$role" == PM ]]; then
+                print_error "el PM no arrancó; no se envía el arranque ni se marca status.json." >&2
+                print_info "Para recuperar, en el pane ${pane_id}: agy --agent ${role}-${project_name}${repo_path:+ --add-dir $project_dir} -i \"Lee y segui las instrucciones de arranque del archivo ${trio_dir}/kickoff.md\"" >&2
+            fi
         fi
+    else
+        if [[ "$kickoff_pm" -eq 1 ]]; then kickoff_en_arranque=1; fi
     fi
 }
