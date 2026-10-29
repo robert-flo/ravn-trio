@@ -232,7 +232,10 @@ iniciar_agente_rol() {
     if ! start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${agent_args[@]}" 2>&1)"; then
         # Si el agente requiere interacción o confirmación inicial (ej. prompts de bienvenida o permisos),
         # herdr reporta agent_not_ready. El proceso queda corriendo en el panel.
-        if echo "$start_output" | jq -e '.error.code == "agent_not_ready"' >/dev/null 2>&1; then
+        # agent_not_ready y timeout (herdr src/cli/agent.rs:722-727, tras escribir ya el
+        # comando en el pane) significan que agy se lanzó aunque herdr no lo confirmó.
+        if echo "$start_output" | jq -e '.error.code == "agent_not_ready" or .error.code == "timeout"' >/dev/null 2>&1; then
+            print_warn "${role}: herdr no confirmó el arranque a tiempo (diálogo de confianza?); agy ya quedó lanzado en ${pane_id}." >&2
             if [[ "$kickoff_pm" -eq 1 ]]; then kickoff_en_arranque=1; fi
         else
             if [[ "$role" == PM ]]; then pm_fallo_inicio=1; fi
