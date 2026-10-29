@@ -15,7 +15,7 @@ fallo() { echo "FALLO: $*" >&2; exit 1; }
 
 out="$("$aqui/pj-trio" --dry-run "$tmp/pj-demo" 42 --repo "$tmp/miembro" 2>&1)"
 grep -q 'herdr agent start "pm-miembro-42"' <<<"$out" || fallo "nombre de agente por proyecto y ticket"
-grep -q -- '-i "<trio-pm-prompt.md renderizado>"' <<<"$out" || fallo "arranque vía agy -i"
+grep -q -- '-i "Lee y segui al pie de la letra las instrucciones de arranque del archivo ' <<<"$out" || fallo "arranque vía agy -i"
 out43="$("$aqui/pj-trio" --dry-run "$tmp/pj-demo" 43 --repo "$tmp/miembro" 2>&1)"
 grep -q 'herdr agent start "pm-miembro-43"' <<<"$out43" || fallo "otro ticket del mismo proyecto usa otro nombre"
 grep -q "config user.email \"25asab015@ujmd.edu.sv\"" <<<"$out" || fallo "identidad git"
