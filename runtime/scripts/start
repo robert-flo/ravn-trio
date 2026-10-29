@@ -120,6 +120,10 @@ fi
 # 7. Modo --dry-run
 verificar_agentes_disponibles
 
+# Con --repo, los agentes abren en el clon del miembro (el meta-repo va por --add-dir).
+work_dir="${repo_path:-$project_dir}"
+echo "Directorio de trabajo de los agentes: $work_dir${repo_path:+ (miembro; meta-repo $project_dir vía --add-dir)}"
+
 if [[ "$dry_run" -eq 1 ]]; then
     echo "[dry-run] Proyecto resuelto: $project_dir ($project_name)"
     if [[ -n "$repo_path" ]]; then
@@ -130,12 +134,12 @@ if [[ "$dry_run" -eq 1 ]]; then
     echo "[dry-run] Kinds: PM='${PM_KIND}' WK='${WK_KIND}' RV='${RV_KIND}'"
     echo ""
     instalar_integraciones
-    echo "[dry-run] herdr workspace create --cwd \"$project_dir\" --label \"$ws_label\" --no-focus"
+    echo "[dry-run] herdr workspace create --cwd \"$work_dir\" --label \"$ws_label\" --no-focus"
     echo "[dry-run] herdr tab rename \"<id_tab_pm>\" pm"
     echo "[dry-run] herdr pane rename \"<id_pane_pm>\" \"PM-${ticket}\""
-    echo "[dry-run] herdr tab create --workspace \"<id_ws>\" --cwd \"$project_dir\" --label wk --no-focus"
+    echo "[dry-run] herdr tab create --workspace \"<id_ws>\" --cwd \"$work_dir\" --label wk --no-focus"
     echo "[dry-run] herdr pane rename \"<id_pane_wk>\" \"WK-${ticket}\""
-    echo "[dry-run] herdr tab create --workspace \"<id_ws>\" --cwd \"$project_dir\" --label rv --no-focus"
+    echo "[dry-run] herdr tab create --workspace \"<id_ws>\" --cwd \"$work_dir\" --label rv --no-focus"
     echo "[dry-run] herdr pane rename \"<id_pane_rv>\" \"RV-${ticket}\""
 
     for role in PM WK RV; do
@@ -150,7 +154,11 @@ if [[ "$dry_run" -eq 1 ]]; then
         if [[ -n "$k" ]]; then
             extra_args="-- --agent \"${role}-${project_name}\""
             if [[ -n "$repo_path" ]]; then
-                extra_args="$extra_args --add-dir \"$repo_path\""
+                extra_args="$extra_args --add-dir \"$project_dir\""
+            fi
+            if [[ "$role" == PM && "$k" == agy ]] && kickoff_pendiente; then
+                extra_args="$extra_args -i \"<trio-pm-prompt.md renderizado>\""
+                kickoff_en_arranque=1
             fi
             echo "[dry-run] herdr agent start \"$an\" --kind \"$k\" --pane \"<id_pane_${role_lower}>\" $extra_args"
         else
@@ -213,7 +221,7 @@ if [[ -n "$existing_ws_id" ]]; then
             pm_tab="$first_tab"
             herdr tab rename "$pm_tab" pm >/dev/null
         else
-            pm_create="$(herdr tab create --workspace "$ws_id" --cwd "$project_dir" --label pm --no-focus)"
+            pm_create="$(herdr tab create --workspace "$ws_id" --cwd "$work_dir" --label pm --no-focus)"
             pm_tab="$(echo "$pm_create" | jq -r '.result.tab.tab_id')"
             pm_pane="$(echo "$pm_create" | jq -r '.result.root_pane.pane_id')"
         fi
@@ -228,7 +236,7 @@ if [[ -n "$existing_ws_id" ]]; then
     # Tab WK
     wk_tab="$(echo "$tabs_json" | jq -r '.result.tabs[]? | select(.label == "wk") | .tab_id' | head -n 1)"
     if [[ -z "$wk_tab" ]]; then
-        wk_create="$(herdr tab create --workspace "$ws_id" --cwd "$project_dir" --label wk --no-focus)"
+        wk_create="$(herdr tab create --workspace "$ws_id" --cwd "$work_dir" --label wk --no-focus)"
         wk_tab="$(echo "$wk_create" | jq -r '.result.tab.tab_id')"
         wk_pane="$(echo "$wk_create" | jq -r '.result.root_pane.pane_id')"
     else
@@ -241,7 +249,7 @@ if [[ -n "$existing_ws_id" ]]; then
     # Tab RV
     rv_tab="$(echo "$tabs_json" | jq -r '.result.tabs[]? | select(.label == "rv") | .tab_id' | head -n 1)"
     if [[ -z "$rv_tab" ]]; then
-        rv_create="$(herdr tab create --workspace "$ws_id" --cwd "$project_dir" --label rv --no-focus)"
+        rv_create="$(herdr tab create --workspace "$ws_id" --cwd "$work_dir" --label rv --no-focus)"
         rv_tab="$(echo "$rv_create" | jq -r '.result.tab.tab_id')"
         rv_pane="$(echo "$rv_create" | jq -r '.result.root_pane.pane_id')"
     else
@@ -251,7 +259,7 @@ if [[ -n "$existing_ws_id" ]]; then
         herdr pane rename "$rv_pane" "RV-${ticket}" >/dev/null
     fi
 else
-    create_json="$(herdr workspace create --cwd "$project_dir" --label "$ws_label" --no-focus)"
+    create_json="$(herdr workspace create --cwd "$work_dir" --label "$ws_label" --no-focus)"
     if echo "$create_json" | jq -e '.error' >/dev/null 2>&1; then
         err_msg="$(echo "$create_json" | jq -r '.error.message // .error.code')"
         print_error "Error al crear el workspace en herdr: $err_msg" >&2
@@ -264,7 +272,7 @@ else
     herdr tab rename "$pm_tab" pm >/dev/null
     herdr pane rename "$pm_pane" "PM-${ticket}" >/dev/null
 
-    wk_create="$(herdr tab create --workspace "$ws_id" --cwd "$project_dir" --label wk --no-focus)"
+    wk_create="$(herdr tab create --workspace "$ws_id" --cwd "$work_dir" --label wk --no-focus)"
     if echo "$wk_create" | jq -e '.error' >/dev/null 2>&1; then
         err_msg="$(echo "$wk_create" | jq -r '.error.message // .error.code')"
         print_error "Error al crear tab wk: $err_msg" >&2
@@ -274,7 +282,7 @@ else
     wk_pane="$(echo "$wk_create" | jq -r '.result.root_pane.pane_id')"
     herdr pane rename "$wk_pane" "WK-${ticket}" >/dev/null
 
-    rv_create="$(herdr tab create --workspace "$ws_id" --cwd "$project_dir" --label rv --no-focus)"
+    rv_create="$(herdr tab create --workspace "$ws_id" --cwd "$work_dir" --label rv --no-focus)"
     if echo "$rv_create" | jq -e '.error' >/dev/null 2>&1; then
         err_msg="$(echo "$rv_create" | jq -r '.error.message // .error.code')"
         print_error "Error al crear tab rv: $err_msg" >&2
