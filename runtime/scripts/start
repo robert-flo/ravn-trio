@@ -122,9 +122,14 @@ fi
 proyecto_arg="${positional[0]}"
 ticket="${positional[1]}"
 base_rama="${base_rama#origin/}"
-if [[ -n "$base_rama" ]] && ! git check-ref-format --branch "$base_rama" >/dev/null 2>&1; then
-    print_error "--base: '$base_rama' no es un nombre de rama válido." >&2
-    exit 1
+# La base termina en comandos que el PM corre en shell: solo caracteres seguros
+# (sin $, `, ;, |, &, comillas ni espacios) y además un nombre de rama válido.
+if [[ -n "$base_rama" ]]; then
+    if [[ ! "$base_rama" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] \
+        || ! git check-ref-format --branch "$base_rama" >/dev/null 2>&1; then
+        print_error "--base: '$base_rama' no es un nombre de rama válido (solo letras, números, '.', '_', '/' y '-')." >&2
+        exit 1
+    fi
 fi
 
 
@@ -132,6 +137,14 @@ trio_resolver_proyecto
 trio_cargar_config
 trio_nombres
 trio_localizar_recursos
+
+# Con --base, la rama del spec tiene que existir en origin antes de abrir nada.
+if [[ -n "$base_rama" ]]; then
+    if ! git -C "${repo_path:-$project_dir}" ls-remote --exit-code --heads origin "$base_rama" >/dev/null 2>&1; then
+        print_error "--base: la rama '$base_rama' no existe en origin de ${repo_path:-$project_dir}." >&2
+        exit 1
+    fi
+fi
 
 if [[ "$print_kickoff" -eq 1 ]]; then
     renderizar_kickoff

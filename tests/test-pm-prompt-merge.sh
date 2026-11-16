@@ -34,6 +34,13 @@ for dato in 'link del PR' 'APRUEBO' 'sha del merge' 'validación manual'; do
   grep -q "$dato" <<<"$paso7" || fallo "el aviso a Roberto no lleva: $dato"
 done
 
+# El WK abre el PR con gh pr create explícito y la base del ticket.
+grep -qF 'gh pr create -R {{TICKET_REPO}}{{GH_PR_BASE}}' "$prompt" || fallo "falta gh pr create con la base en el encargo al WK"
+
+# El README también dice que con head nuevo no se mergea y que se avisa a Roberto.
+grep -q 'Si el head cambió después del APRUEBO, no mergea y pide otra revisión' "$readme" || fallo "README sin la regla del head que cambió"
+grep -q 'le avisa a Roberto con el link del PR, el link del APRUEBO, el sha del merge' "$readme" || fallo "README sin el aviso a Roberto"
+
 # La regla también queda en Límites.
 grep -qF 'Mergeás solo tras APRUEBO <sha>' "$prompt" || fallo "falta la regla de merge en Límites"
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # --base: un sub-issue sale de la rama de su spec (ADR 0006 de pj-template) y
 # su PR va contra ella; sin --base (trivial), de origin/HEAD a la rama por defecto.
+# La base se valida (allowlist + check-ref-format) y tiene que existir en origin.
 set -euo pipefail
 
 aqui="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -8,26 +9,37 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 fallo() { echo "FALLO: $*" >&2; exit 1; }
 
-git init -q "$tmp/pj-demo"
-git init -q "$tmp/miembro"
 export PJ_TRIO_CONFIG="$aqui/trio.conf.example"
 export PATH="/usr/bin:/bin"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
-# Trivial: origin/HEAD y PR a la rama por defecto.
-k="$("$aqui/pj-trio" --print-kickoff "$tmp/pj-demo" 42 --repo "$tmp/miembro")"
+# Remote bare local con main y la rama del spec; el miembro lo tiene como origin.
+git init -q --bare -b main "$tmp/remoto.git"
+git init -q -b main "$tmp/miembro"
+git -C "$tmp/miembro" commit -q --allow-empty -m inicio
+git -C "$tmp/miembro" remote add origin "$tmp/remoto.git"
+git -C "$tmp/miembro" push -q origin main main:spec/12-login
+git init -q "$tmp/pj-demo"
+
+kickoff() { "$aqui/pj-trio" --print-kickoff "$tmp/pj-demo" 42 --repo "$tmp/miembro" "$@"; }
+
+# Trivial: origin/HEAD, PR a la rama por defecto y gh pr create sin --base.
+k="$(kickoff)"
 grep -q '{{' <<<"$k" && fallo "quedan placeholders sin --base"
-grep -qE 'worktree add -b feat/42-<slug> .*/miembro-wt-42-\$\(date \+%Y%m%d%H%M%S\) origin/HEAD`' <<<"$k" \
-  || fallo "sin --base el worktree debería salir de origin/HEAD"
-grep -q 'abrí el PR contra la rama por defecto' <<<"$k" || fallo "sin --base el PR va a la rama por defecto"
+grep -qE "worktree add -b feat/42-<slug> .*/miembro-wt-42-\\\$\(date \+%Y%m%d%H%M%S\) 'origin/HEAD'\`" <<<"$k" \
+  || fallo "sin --base el worktree debería salir de 'origin/HEAD'"
+grep -q 'abrí el PR contra la rama por defecto con: gh pr create -R [^ ]* (más' <<<"$k" \
+  || fallo "sin --base, gh pr create explícito y sin --base"
 
-# Sub-issue: origin/<rama del spec> y PR contra ella (también con prefijo origin/ y con =).
+# Sub-issue: origin/<rama del spec>, PR contra ella con gh pr create --base.
 for arg in "--base spec/12-login" "--base origin/spec/12-login" "--base=spec/12-login"; do
   # shellcheck disable=SC2086 # arg lleva opción y valor a propósito.
-  k="$("$aqui/pj-trio" --print-kickoff "$tmp/pj-demo" 42 --repo "$tmp/miembro" $arg)"
+  k="$(kickoff $arg)"
   grep -q '{{' <<<"$k" && fallo "quedan placeholders con $arg"
-  grep -qE 'worktree add -b feat/42-<slug> .*/miembro-wt-42-\$\(date \+%Y%m%d%H%M%S\) origin/spec/12-login`' <<<"$k" \
-    || fallo "con $arg el worktree debería salir de origin/spec/12-login"
-  grep -q 'abrí el PR contra spec/12-login' <<<"$k" || fallo "con $arg el PR va contra la rama del spec"
+  grep -qE "worktree add -b feat/42-<slug> .*/miembro-wt-42-\\\$\(date \+%Y%m%d%H%M%S\) 'origin/spec/12-login'\`" <<<"$k" \
+    || fallo "con $arg el worktree debería salir de 'origin/spec/12-login'"
+  grep -q "abrí el PR contra spec/12-login con: gh pr create -R [^ ]* --base 'spec/12-login'" <<<"$k" \
+    || fallo "con $arg falta gh pr create --base 'spec/12-login'"
   grep -q 'origin/origin/' <<<"$k" && fallo "con $arg quedó origin/origin/"
 done
 
@@ -35,8 +47,23 @@ done
 out="$("$aqui/pj-trio" --dry-run "$tmp/pj-demo" 42 --repo "$tmp/miembro" --base spec/12-login 2>&1)"
 grep -q 'Base del worktree y del PR: origin/spec/12-login' <<<"$out" || fallo "dry-run sin la base"
 
-# Nombre de rama inválido o --base sin valor: error.
-if "$aqui/pj-trio" --print-kickoff "$tmp/pj-demo" 42 --base 'mal..rama' >/dev/null 2>&1; then fallo "aceptó una rama inválida"; fi
-if "$aqui/pj-trio" --print-kickoff "$tmp/pj-demo" 42 --base >/dev/null 2>&1; then fallo "aceptó --base sin valor"; fi
+# Rechazos: inyección de shell, & (rompe el render), -x, .., @ y --base sin valor.
+# shellcheck disable=SC2016 # literales a propósito: no deben expandirse.
+for mala in 'spec/$(touch${IFS}/tmp/pwn)' 'spec/x;id' 'spec/`id`' 'spec/a|b' 'spec/a&b' "spec/a'b" '-x' 'a..b' '@' 'spec/@{-1}'; do
+  if out="$(kickoff --base "$mala" 2>&1)"; then fallo "aceptó --base '$mala'"; fi
+  grep -q 'no es un nombre de rama válido' <<<"$out" || fallo "--base '$mala' sin error claro: $out"
+done
+if kickoff --base >/dev/null 2>&1; then fallo "aceptó --base sin valor"; fi
+
+# Rama inexistente en origin: falla antes de abrir tabs (herdr de mentira que anota llamadas).
+mkdir -p "$tmp/bin"
+printf '#!/bin/sh\necho "$@" >> "%s/herdr.log"\n' "$tmp" > "$tmp/bin/herdr"
+chmod +x "$tmp/bin/herdr"
+if out="$(PATH="$tmp/bin:$PATH" "$aqui/pj-trio" "$tmp/pj-demo" 42 --repo "$tmp/miembro" --base spec/nope 2>&1)"; then
+  fallo "aceptó una rama que no existe en origin"
+fi
+grep -q "la rama 'spec/nope' no existe en origin" <<<"$out" || fallo "rama inexistente sin error claro: $out"
+[[ ! -e "$tmp/herdr.log" ]] || fallo "llamó a herdr antes de validar la base: $(cat "$tmp/herdr.log")"
+if kickoff --base spec/nope >/dev/null 2>&1; then fallo "--print-kickoff aceptó una rama inexistente"; fi
 
 echo "OK base del spec"
