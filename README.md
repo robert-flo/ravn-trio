@@ -47,13 +47,14 @@ Instalado: todo bajo `/usr/share/ravn/trio/` y `/usr/bin/pj-trio` → symlink al
 ### Uso
 
 ```bash
-pj-trio [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>]
+pj-trio [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>] [--base <rama>]
 ```
 
 - `<proyecto>`: Ruta al checkout git del proyecto meta (`pj-*`) o nombre del directorio. Si pasás únicamente el nombre, se resuelve contra la variable de entorno `$PJ_TRIO_ROOT`, o por defecto contra el directorio padre de `$PWD` o `/z-drive/tries`.
 - `<ticket>`: Identificador del issue o ticket a trabajar (por ejemplo `18` o `999`).
 - `--repo <miembro>`: Repositorio miembro opcional, donde vive el issue. Acepta ruta, nombre del directorio, nombre del repo en GitHub (`pj-domina-rf-git-setup` o `robert-flo/pj-domina-rf-git-setup`) o nombre corto único (`rf-git-setup`). Se busca siempre igual, sin depender de `$PWD`: subdirectorios del proyecto (layout de try-clone, `rf-<nombre>`), hermanos y las raíces `$PJ_TRIO_ROOTS` (default `/z-drive/tries`, con el prefijo de fecha de `try clone`). El PM lee el issue con `gh issue view <ticket> -R <dueño>/<miembro>` y el handoff/agentes usan la clave `<miembro>-<ticket>` (no choca el #4 de dos miembros). Los agentes abren en el clon del miembro y el meta-repo se les añade con `--add-dir`.
 - Proyecto meta ausente: si `<proyecto>` es un nombre (o `dueño/nombre`) que no está en las raíces, `pj-trio` avisa y clona **solo ese** meta-repo con try-clone (`PJ_TRIO_CLONE_CMD`, default `try exec --path {root} clone {url} | bash`, en la primera raíz de `$PJ_TRIO_ROOTS`; dueño `PJ_TRIO_OWNER`, default `robert-flo`) y sigue. En `--dry-run` solo muestra el comando; `PJ_TRIO_NO_CLONE=1` lo desactiva.
+- `--base <rama>`: Rama del spec cuando el ticket es un sub-issue (ADR 0006 de pj-template): el worktree del WK sale de `origin/<rama>` y su PR va contra `<rama>`. Sin `--base` (un trivial), sale de `origin/HEAD` y el PR va a la rama por defecto. Acepta `origin/<rama>` y rechaza nombres de rama inválidos.
 - `--dry-run`: Muestra los comandos y la topología sin aplicarlos.
 - `--no-kickoff`: No envía el prompt de arranque al PM.
 - `--print-kickoff`: Imprime el prompt de arranque renderizado y sale (para pegarlo a mano).
@@ -119,7 +120,7 @@ Si ejecutás `pj-trio` una segunda vez con los mismos argumentos:
 - **Handoff único:** `<proyecto>/.trio/<ticket>/` con `plan.md`, `wk.md`, `rv.md` y `status.json`, commiteado en el meta-repo; nombra solo roles y nunca se duplica en los repos miembros.
 - **El PM pinguea** a WK y RV con `herdr agent prompt`, espera con `herdr agent wait … --timeout 600000` (reintenta si falla) y confirma con `herdr agent read` más el archivo de entrega.
 - **Merge (el PM, tras el APRUEBO):** tras `APRUEBO <sha>` de RV, el PM mergea con `gh pr merge <pr> --squash --delete-branch --match-head-commit <sha>`, usando el sha que nombró RV. Si el head cambió después del APRUEBO, no mergea y pide otra revisión. Después cierra (status `hecho`, commit + push del meta-repo, `worktree remove`) y le avisa a Roberto con el link del PR, el link del APRUEBO, el sha del merge y los pasos de validación manual (ADR 0014 de pj-template).
-- **Worktree nuevo por ticket**, siempre; nunca se reutiliza uno viejo: `<miembro>-wt-<ticket>-<AAAAMMDDhhmmss>` (hermano del clon del miembro), en la rama `feat/<ticket>-<slug>` desde `origin/HEAD` (paso 2 de `trio-pm-prompt.md`).
+- **Worktree nuevo por ticket**, siempre; nunca se reutiliza uno viejo: `<miembro>-wt-<ticket>-<AAAAMMDDhhmmss>` (hermano del clon del miembro), en la rama `feat/<ticket>-<slug>`, desde `origin/<rama del spec>` con `--base` (sub-issue) o desde `origin/HEAD` (trivial). El PR va contra esa misma base (paso 2 de `trio-pm-prompt.md`).
 - **Identidad git:** `TRIO_GIT_NAME`/`TRIO_GIT_EMAIL` de la config; `pj-trio` la fija con `git config` local en el meta-repo y el miembro (los worktrees la heredan). El PM no la toca.
 - **Reintento y aviso (#61):** si un paso falla (wait con error o vencido; agente blocked, agent_prompt_stalled, unknown o ausente; idle sin archivo de entrega), el PM lo reintenta una sola vez. Si vuelve a fallar se detiene, escribe `status.json` con `needs-roberto` y la cola del panel, y lanza `notify-send`. Nunca responde por su cuenta un diálogo de aprobación. Las alertas al teléfono quedan fuera de alcance.
 - **`trio-status`:** helper que escribe `status.json` y avisa:

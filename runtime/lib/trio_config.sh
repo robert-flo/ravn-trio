@@ -68,6 +68,12 @@ renderizar_kickoff() {
         print_error "no se encontró trio-pm-prompt.md (definí PJ_TRIO_PM_PROMPT)." >&2
         return 1
     fi
+    # Base del worktree y del PR: la rama del spec (--base) o la rama por defecto.
+    local base_ref="origin/HEAD" base_pr="la rama por defecto"
+    if [[ -n "${base_rama:-}" ]]; then
+        base_ref="origin/${base_rama}"
+        base_pr="${base_rama}"
+    fi
     local t
     t="$(cat "$prompt_template")"
     t="${t//\{\{PROYECTO\}\}/$project_name}"
@@ -76,6 +82,8 @@ renderizar_kickoff() {
     t="${t//\{\{TICKET_REPO\}\}/${ticket_repo:-}}"
     t="${t//\{\{MIEMBRO_DIR\}\}/$miembro_dir}"
     t="${t//\{\{TRIO_DIR\}\}/$trio_dir}"
+    t="${t//\{\{BASE_REF\}\}/$base_ref}"
+    t="${t//\{\{BASE_PR\}\}/$base_pr}"
     t="${t//\{\{AGENTE_PM\}\}/$agent_pm}"
     t="${t//\{\{AGENTE_WK\}\}/$agent_wk}"
     t="${t//\{\{AGENTE_RV\}\}/$agent_rv}"
