@@ -113,6 +113,15 @@ Si ejecutás `pj-trio` una segunda vez con los mismos argumentos:
 - No duplica procesos ni paneles de agentes en ejecución.
 - Mantiene exactamente 3 tabs y 3 paneles en total, sin splits residuales ni paneles huérfanos.
 
+### Worktree del WK
+
+El PM crea un worktree nuevo por ticket (paso 2 de `trio-pm-prompt.md`) y el WK trabaja solo ahí; nunca se reutiliza uno viejo:
+
+- Ruta: `<miembro>-wt-<ticket>-<AAAAMMDDhhmmss>`, hermana del clon del miembro (o del meta-repo sin `--repo`).
+- Rama: `feat/<ticket>-<slug>` (si ya existe, otro slug).
+- Base: `origin/<rama del spec>` con `--base` (sub-issue) u `origin/HEAD` sin `--base` (trivial). El PR va contra esa misma base.
+- Al cerrar: `git worktree remove <ruta>`.
+
 ### El PM maneja a WK y RV (#60)
 
 - **Nombres de agente:** `pm|wk|rv-<miembro corto>-<ticket>` (o `<proyecto>` sin `--repo`), en minúsculas y saneados para herdr (≤32, `^[a-z][a-z0-9_-]*$`). Se quitan los prefijos `pj-domina-`, `rf-`, `fo-` (`rf-pj-domina-rf-git-setup` #3 → `pm-git-setup-3`); si aún no cabe se trunca y se agrega un hash de 4 caracteres. Es determinista: si ese ticket ya tiene su trío corriendo, `pj-trio` avisa y no lo duplica.
@@ -120,7 +129,7 @@ Si ejecutás `pj-trio` una segunda vez con los mismos argumentos:
 - **Handoff único:** `<proyecto>/.trio/<ticket>/` con `plan.md`, `wk.md`, `rv.md` y `status.json`, commiteado en el meta-repo; nombra solo roles y nunca se duplica en los repos miembros.
 - **El PM pinguea** a WK y RV con `herdr agent prompt`, espera con `herdr agent wait … --timeout 600000` (reintenta si falla) y confirma con `herdr agent read` más el archivo de entrega.
 - **Merge (el PM, tras el APRUEBO):** tras `APRUEBO <sha>` de RV, el PM mergea con `gh pr merge <pr> --squash --delete-branch --match-head-commit <sha>`, usando el sha que nombró RV. Si el head cambió después del APRUEBO, no mergea y pide otra revisión. Después cierra (status `hecho`, commit + push del meta-repo, `worktree remove`) y le avisa a Roberto con el link del PR, el link del APRUEBO, el sha del merge y los pasos de validación manual (ADR 0014 de pj-template).
-- **Worktree nuevo por ticket**, siempre; nunca se reutiliza uno viejo: `<miembro>-wt-<ticket>-<AAAAMMDDhhmmss>` (hermano del clon del miembro), en la rama `feat/<ticket>-<slug>`, desde `origin/<rama del spec>` con `--base` (sub-issue) o desde `origin/HEAD` (trivial). El PR va contra esa misma base (paso 2 de `trio-pm-prompt.md`).
+- **Worktree nuevo por ticket**, siempre; ver [Worktree del WK](#worktree-del-wk).
 - **Identidad git:** `TRIO_GIT_NAME`/`TRIO_GIT_EMAIL` de la config; `pj-trio` la fija con `git config` local en el meta-repo y el miembro (los worktrees la heredan). El PM no la toca.
 - **Reintento y aviso (#61):** si un paso falla (wait con error o vencido; agente blocked, agent_prompt_stalled, unknown o ausente; idle sin archivo de entrega), el PM lo reintenta una sola vez. Si vuelve a fallar se detiene, escribe `status.json` con `needs-roberto` y la cola del panel, y lanza `notify-send`. Nunca responde por su cuenta un diálogo de aprobación. Las alertas al teléfono quedan fuera de alcance.
 - **`trio-status`:** helper que escribe `status.json` y avisa:
