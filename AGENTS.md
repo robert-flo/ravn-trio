@@ -9,6 +9,10 @@ El empaquetado (PKGBUILD) vive en `ravn-trio-arch`, no acá.
   junto a sí mismo (checkout). Nada en `$HOME`.
 - Los prompts y los handoffs `.trio/` nombran solo roles (PM, WK, RV), nunca
   plataformas. Qué kind corre cada rol vive solo en la config (`trio.conf`).
+- Versión nueva: subí `version` en `herdr-plugin.toml` en el mismo PR (título
+  `… · vN.N.N`). Al mergear, `release.yml` crea el tag y el GitHub Release (o
+  usa el tag `vN.N.N` si lo empujás) y avisa a `ravn-trio-arch`, que sube el
+  PKGBUILD y publica solo. Sin release, el paquete no se entera.
 - Commits: identidad `Roberto Flores <25asab015@ujmd.edu.sv>`, sin force push.
 - Diseño de `robert-flo/pj-domina-rf-git-setup`: launcher + `runtime/commands.tsv`
   + módulos en `runtime/scripts/`. `runtime/lib/{presentation,command_catalog,

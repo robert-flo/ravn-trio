@@ -1,0 +1,104 @@
+name: Release
+
+# Un GitHub Release por versión, sin pasos manuales: ravn-trio-arch detecta
+# versiones nuevas por releases/latest (no por tags), así que un tag sin
+# release deja el paquete viejo. Dispara de dos formas, porque la versión
+# vive en herdr-plugin.toml y el tag vN.N.N se empuja a mano tras el merge
+# («… · vN.N.N»): el push del tag, y el push a main que cambia
+# herdr-plugin.toml (red si el tag no se empuja; entonces el release crea el
+# tag en el commit del merge). Idempotente: si el release ya existe, no hace
+# nada. Marca latest solo a la versión más alta. Con un release nuevo y
+# latest, despacha upstream-released a ravn-trio-arch para que suba el
+# PKGBUILD y publique sin esperar al cron diario.
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - main
+    paths:
+      - herdr-plugin.toml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Create the GitHub Release for the version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create the release if missing and notify the -arch duo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCH_DISPATCH_TOKEN: ${{ secrets.ARCH_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # La versión sale del tag empujado o, en un push a main, del
+          # manifiesto del plugin (la misma que lleva el título del merge).
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            version="$(sed -nE 's/^version = "([^"]+)"$/\1/p' herdr-plugin.toml)"
+            tag="v${version}"
+          fi
+          if [[ ! "${tag}" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "la versión no es un vN.N.N estable: '${tag}'" >&2
+            exit 1
+          fi
+          version="${tag#v}"
+
+          if gh release view "${tag}" -R "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            echo "el release ${tag} ya existe: nada que hacer."
+            exit 0
+          fi
+
+          # latest solo si es la versión más alta (un tag viejo empujado
+          # tarde no le quita latest al release actual).
+          newest="$( { gh release list -R "${GITHUB_REPOSITORY}" --limit 200 --json tagName --jq '.[].tagName'; printf '%s\n' "${tag}"; } \
+            | grep -E '^v[0-9]+(\.[0-9]+)*$' | sort -V | tail -n 1)"
+          latest=false
+          if [[ "${newest}" == "${tag}" ]]; then
+            latest=true
+          fi
+
+          # Con el tag ya empujado se usa tal cual; si no existe (push a main
+          # sin tag), el release lo crea en el commit del merge.
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" > /dev/null 2>&1; then
+            target=(--verify-tag)
+          else
+            target=(--target "${GITHUB_SHA}")
+          fi
+          if ! gh release create "${tag}" -R "${GITHUB_REPOSITORY}" "${target[@]}" \
+            --title "ravn-trio ${version}" --generate-notes --latest="${latest}"; then
+            # El push del tag y el de main pueden correr casi a la vez: si el
+            # otro run ya lo creó, no es un fallo.
+            if gh release view "${tag}" -R "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+              echo "otro run creó el release ${tag}: nada que hacer."
+              exit 0
+            fi
+            echo "no se pudo crear el release ${tag}" >&2
+            exit 1
+          fi
+          echo "release ${tag} creado (latest=${latest})."
+
+          if [[ "${latest}" != "true" ]]; then
+            exit 0
+          fi
+          if [[ -z "${ARCH_DISPATCH_TOKEN:-}" ]]; then
+            echo "sin ARCH_DISPATCH_TOKEN: el cron diario de ${GITHUB_REPOSITORY}-arch toma ${tag}."
+            exit 0
+          fi
+          GH_TOKEN="${ARCH_DISPATCH_TOKEN}" gh api "repos/${GITHUB_REPOSITORY}-arch/dispatches" \
+            -f event_type=upstream-released \
+            -f "client_payload[tag]=${tag}"
+          echo "despachado upstream-released a ${GITHUB_REPOSITORY}-arch (${tag})."
