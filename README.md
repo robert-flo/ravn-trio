@@ -47,13 +47,14 @@ Instalado: todo bajo `/usr/share/ravn/trio/` y `/usr/bin/pj-trio` → symlink al
 ### Uso
 
 ```bash
-pj-trio [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>]
+pj-trio [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>] [--base <rama>]
 ```
 
 - `<proyecto>`: Ruta al checkout git del proyecto meta (`pj-*`) o nombre del directorio. Si pasás únicamente el nombre, se resuelve contra la variable de entorno `$PJ_TRIO_ROOT`, o por defecto contra el directorio padre de `$PWD` o `/z-drive/tries`.
 - `<ticket>`: Identificador del issue o ticket a trabajar (por ejemplo `18` o `999`).
-- `--repo <miembro>`: Repositorio miembro opcional, donde vive el issue. Acepta ruta, nombre del directorio, nombre del repo en GitHub (`pj-domina-rf-git-setup` o `robert-flo/pj-domina-rf-git-setup`) o nombre corto único (`rf-git-setup`). Se busca siempre igual, sin depender de `$PWD`: subdirectorios del proyecto (layout de try-clone, `rf-<nombre>`), hermanos y las raíces `$PJ_TRIO_ROOTS` (default `/z-drive/tries`, con el prefijo de fecha de `try clone`). El PM lee el issue con `gh issue view <ticket> -R <dueño>/<miembro>` y el handoff/agentes usan la clave `<miembro>-<ticket>` (no choca el #4 de dos miembros). Se añade al agente mediante `--add-dir`.
+- `--repo <miembro>`: Repositorio miembro opcional, donde vive el issue. Acepta ruta, nombre del directorio, nombre del repo en GitHub (`pj-domina-rf-git-setup` o `robert-flo/pj-domina-rf-git-setup`) o nombre corto único (`rf-git-setup`). Se busca siempre igual, sin depender de `$PWD`: subdirectorios del proyecto (layout de try-clone, `rf-<nombre>`), hermanos y las raíces `$PJ_TRIO_ROOTS` (default `/z-drive/tries`, con el prefijo de fecha de `try clone`). El PM lee el issue con `gh issue view <ticket> -R <dueño>/<miembro>` y el handoff/agentes usan la clave `<miembro>-<ticket>` (no choca el #4 de dos miembros). Los agentes abren en el clon del miembro y el meta-repo se les añade con `--add-dir`.
 - Proyecto meta ausente: si `<proyecto>` es un nombre (o `dueño/nombre`) que no está en las raíces, `pj-trio` avisa y clona **solo ese** meta-repo con try-clone (`PJ_TRIO_CLONE_CMD`, default `try exec --path {root} clone {url} | bash`, en la primera raíz de `$PJ_TRIO_ROOTS`; dueño `PJ_TRIO_OWNER`, default `robert-flo`) y sigue. En `--dry-run` solo muestra el comando; `PJ_TRIO_NO_CLONE=1` lo desactiva.
+- `--base <rama>`: Rama del spec cuando el ticket es un sub-issue (ADR 0006 de pj-template): el worktree del WK sale de `origin/<rama>` y su PR va contra `<rama>`. Sin `--base` (un trivial), sale de `origin/HEAD` y el PR va a la rama por defecto. Acepta `origin/<rama>`. Como la base termina en comandos que corre el PM, solo se aceptan letras, números, `.`, `_`, `/` y `-` (`^[A-Za-z0-9][A-Za-z0-9._/-]*$`), además de `git check-ref-format --branch`. La rama tiene que existir en `origin` del miembro (ref exacta: `git ls-remote --exit-code origin refs/heads/<rama>`): si no existe, `pj-trio` falla antes de abrir los tabs.
 - `--dry-run`: Muestra los comandos y la topología sin aplicarlos.
 - `--no-kickoff`: No envía el prompt de arranque al PM.
 - `--print-kickoff`: Imprime el prompt de arranque renderizado y sale (para pegarlo a mano).
@@ -66,7 +67,7 @@ En lugar de dividir un único tab en paneles pequeños, `pj-trio` crea o reutili
 - **wk**: Tab dedicado a la implementación de cambios y código. Panel etiquetado como `WK-<ticket>`, con agente `wk-<proyecto>-<ticket>`.
 - **rv**: Tab dedicado a la revisión técnica y validación de entregas. Panel etiquetado como `RV-<ticket>`, con agente `rv-<proyecto>-<ticket>`.
 
-El directorio de trabajo (`cwd`) para los tres tabs es la carpeta del proyecto meta (`pj-*`). Si se especifica un repositorio miembro con `--repo`, la ruta resuelta se inyecta como contexto adicional al agente mediante `--add-dir <ruta-miembro>`.
+El directorio de trabajo (`cwd`) de los tres tabs es el clon del miembro si pasás `--repo`, y el meta-repo (`pj-*`) si no. Con `--repo`, el meta-repo (donde vive `.trio/`) se añade a cada agente con `--add-dir <meta-repo>`.
 
 ### Etiquetado de Workspace
 
@@ -112,14 +113,24 @@ Si ejecutás `pj-trio` una segunda vez con los mismos argumentos:
 - No duplica procesos ni paneles de agentes en ejecución.
 - Mantiene exactamente 3 tabs y 3 paneles en total, sin splits residuales ni paneles huérfanos.
 
+### Worktree del WK
+
+El PM crea un worktree nuevo por ticket (paso 2 de `trio-pm-prompt.md`) y el WK trabaja solo ahí; nunca se reutiliza uno viejo:
+
+- Ruta: `<miembro>-wt-<ticket>-<AAAAMMDDhhmmss>`, hermana del clon del miembro (o del meta-repo sin `--repo`).
+- Rama: `feat/<ticket>-<slug>` (si ya existe, otro slug).
+- Base: `origin/<rama del spec>` con `--base` (sub-issue) u `origin/HEAD` sin `--base` (trivial).
+- PR: el WK lo abre con `gh pr create -R <repo> --base '<rama del spec>'`. En un trivial lo abre sin `--base`, y gh usa la rama por defecto.
+- Al cerrar: `git worktree remove <ruta>`.
+
 ### El PM maneja a WK y RV (#60)
 
 - **Nombres de agente:** `pm|wk|rv-<miembro corto>-<ticket>` (o `<proyecto>` sin `--repo`), en minúsculas y saneados para herdr (≤32, `^[a-z][a-z0-9_-]*$`). Se quitan los prefijos `pj-domina-`, `rf-`, `fo-` (`rf-pj-domina-rf-git-setup` #3 → `pm-git-setup-3`); si aún no cabe se trunca y se agrega un hash de 4 caracteres. Es determinista: si ese ticket ya tiene su trío corriendo, `pj-trio` avisa y no lo duplica.
-- **Arranque automático:** tras abrir los tabs, `pj-trio` renderiza `trio-pm-prompt.md` y lo envía con `herdr agent prompt pm-<miembro corto>-<ticket> "…"`. El marcador es `<proyecto>/.trio/<ticket>/status.json`: si existe, no se reenvía (idempotente). Antes de enviarlo espera a que el PM quede `idle` (`TRIO_READY_TIMEOUT`, 180 s). Si agy muestra el diálogo «Do you trust the contents of this project?», avisa con `notify-send` y espera una tecla tuya (Enter) para continuar; esa pausa no la corta `TRIO_READY_TIMEOUT`. pj-trio no escribe la confianza de agy: la gestiona la workstation (`trustedWorkspaces` con `/z-drive/tries`). Si vence o el envío falla, pegá la salida de `pj-trio --print-kickoff …`.
+- **Arranque automático:** con `PM_KIND=agy`, `pj-trio` renderiza `trio-pm-prompt.md` en `<proyecto>/.trio/<ticket>/kickoff.md` y arranca el PM con `agy -i "Lee y segui … .trio/<ticket>/kickoff.md"` (una sola línea: herdr rechaza argumentos con saltos de línea). Un PM recién lanzado recibe siempre el arranque, aunque ya exista `status.json`, que se conserva para que retome desde ahí. Con otro kind, lo envía con `herdr agent prompt pm-<miembro corto>-<ticket> "…"` tras esperar a que el PM quede `idle` (`TRIO_READY_TIMEOUT`, 180 s); ahí el marcador es `status.json`: si existe, no se reenvía. Si agy muestra el diálogo «Do you trust the contents of this project?», avisa con `notify-send` y espera una tecla tuya (Enter) para continuar; esa pausa no la corta `TRIO_READY_TIMEOUT`. pj-trio no escribe la confianza de agy: la gestiona la workstation (`trustedWorkspaces` con `/z-drive/tries`). Si vence o el envío falla, pegá la salida de `pj-trio --print-kickoff …`.
 - **Handoff único:** `<proyecto>/.trio/<ticket>/` con `plan.md`, `wk.md`, `rv.md` y `status.json`, commiteado en el meta-repo; nombra solo roles y nunca se duplica en los repos miembros.
 - **El PM pinguea** a WK y RV con `herdr agent prompt`, espera con `herdr agent wait … --timeout 600000` (reintenta si falla) y confirma con `herdr agent read` más el archivo de entrega.
-- **Merge (solo Roberto):** tras `APRUEBO <sha>` de RV, el PM no mergea: escribe `status.json` con `needs-roberto` (`paso merge`, `--pr <url> --head <sha>`) y se detiene. El squash-merge con `gh pr merge --squash --delete-branch --match-head-commit <sha>` lo ejecuta Roberto con su orden en chat sobre el PR listo, y el head del PR no cambia después del APRUEBO. El cierre (status `hecho`, commit + push del meta-repo, `worktree remove`) corre una vez que Roberto ordenó (o confirmó) el merge.
-- **Worktree nuevo por ticket**, siempre; nunca se reutiliza uno viejo.
+- **Merge (el PM, tras el APRUEBO):** tras `APRUEBO <sha>` de RV, el PM mergea con `gh pr merge <pr> --squash --delete-branch --match-head-commit <sha>`, usando el sha que nombró RV. Si el head cambió después del APRUEBO, no mergea y pide otra revisión. Después cierra (status `hecho`, commit + push del meta-repo, `worktree remove`) y le avisa a Roberto con el link del PR, el link del APRUEBO, el sha del merge y los pasos de validación manual (ADR 0014 de pj-template).
+- **Worktree nuevo por ticket**, siempre; ver [Worktree del WK](#worktree-del-wk).
 - **Identidad git:** `TRIO_GIT_NAME`/`TRIO_GIT_EMAIL` de la config; `pj-trio` la fija con `git config` local en el meta-repo y el miembro (los worktrees la heredan). El PM no la toca.
 - **Reintento y aviso (#61):** si un paso falla (wait con error o vencido; agente blocked, agent_prompt_stalled, unknown o ausente; idle sin archivo de entrega), el PM lo reintenta una sola vez. Si vuelve a fallar se detiene, escribe `status.json` con `needs-roberto` y la cola del panel, y lanza `notify-send`. Nunca responde por su cuenta un diálogo de aprobación. Las alertas al teléfono quedan fuera de alcance.
 - **`trio-status`:** helper que escribe `status.json` y avisa:

@@ -30,7 +30,7 @@ source "$PROJECT_DIR/lib/trio_agy.sh"
 
 mostrar_uso() {
     cat <<'EOF'
-Uso: pj-trio [start] [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>]
+Uso: pj-trio [start] [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>] [--base <rama>]
 
 Argumentos:
   <proyecto>        Ruta o nombre del proyecto meta (pj-*).
@@ -40,7 +40,10 @@ Argumentos:
 
 Opciones:
   --repo <miembro>  Repositorio miembro del proyecto (hermano, subdirectorio o ruta).
-                    Se pasa a cada agente mediante --add-dir.
+                    Los agentes abren ahí; el meta-repo va por --add-dir.
+  --base <rama>     Rama del spec (sub-issue, ADR 0006 de pj-template): el worktree
+                    sale de origin/<rama> y el PR va contra <rama>. Sin --base
+                    (trivial), sale de origin/HEAD y el PR va a la rama por defecto.
   --dry-run         Muestra los comandos sin ejecutarlos.
   --no-kickoff      No envía el prompt de arranque al PM.
   --print-kickoff   Imprime el prompt de arranque del PM y sale (no toca herdr).
@@ -53,6 +56,7 @@ dry_run=0
 kickoff=1
 print_kickoff=0
 repo_arg=""
+base_rama=""
 positional=()
 
 while [[ $# -gt 0 ]]; do
@@ -81,6 +85,18 @@ while [[ $# -gt 0 ]]; do
             repo_arg="${1#*=}"
             shift
             ;;
+        --base)
+            if [[ $# -lt 2 ]]; then
+                print_error "--base requiere un argumento." >&2
+                exit 1
+            fi
+            base_rama="$2"
+            shift 2
+            ;;
+        --base=*)
+            base_rama="${1#*=}"
+            shift
+            ;;
         -h|--help)
             mostrar_uso
             exit 0
@@ -105,12 +121,30 @@ fi
 
 proyecto_arg="${positional[0]}"
 ticket="${positional[1]}"
+base_rama="${base_rama#origin/}"
+# La base termina en comandos que el PM corre en shell: solo caracteres seguros
+# (sin $, `, ;, |, &, comillas ni espacios) y además un nombre de rama válido.
+if [[ -n "$base_rama" ]]; then
+    if [[ ! "$base_rama" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] \
+        || ! git check-ref-format --branch "$base_rama" >/dev/null 2>&1; then
+        print_error "--base: '$base_rama' no es un nombre de rama válido (solo letras, números, '.', '_', '/' y '-')." >&2
+        exit 1
+    fi
+fi
 
 
 trio_resolver_proyecto
 trio_cargar_config
 trio_nombres
 trio_localizar_recursos
+
+# Con --base, la rama del spec tiene que existir en origin antes de abrir nada.
+if [[ -n "$base_rama" ]]; then
+    if ! git -C "${repo_path:-$project_dir}" ls-remote --exit-code origin "refs/heads/$base_rama" >/dev/null 2>&1; then
+        print_error "--base: la rama '$base_rama' no existe en origin de ${repo_path:-$project_dir}." >&2
+        exit 1
+    fi
+fi
 
 if [[ "$print_kickoff" -eq 1 ]]; then
     renderizar_kickoff
@@ -123,6 +157,7 @@ verificar_agentes_disponibles
 # Con --repo, los agentes abren en el clon del miembro (el meta-repo va por --add-dir).
 work_dir="${repo_path:-$project_dir}"
 echo "Directorio de trabajo de los agentes: $work_dir${repo_path:+ (miembro; meta-repo $project_dir vía --add-dir)}"
+echo "Base del worktree y del PR: ${base_rama:+origin/$base_rama (rama del spec)}${base_rama:-origin/HEAD (rama por defecto)}"
 
 if [[ "$dry_run" -eq 1 ]]; then
     echo "[dry-run] Proyecto resuelto: $project_dir ($project_name)"
