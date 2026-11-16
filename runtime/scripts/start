@@ -140,7 +140,7 @@ trio_localizar_recursos
 
 # Con --base, la rama del spec tiene que existir en origin antes de abrir nada.
 if [[ -n "$base_rama" ]]; then
-    if ! git -C "${repo_path:-$project_dir}" ls-remote --exit-code --heads origin "$base_rama" >/dev/null 2>&1; then
+    if ! git -C "${repo_path:-$project_dir}" ls-remote --exit-code origin "refs/heads/$base_rama" >/dev/null 2>&1; then
         print_error "--base: la rama '$base_rama' no existe en origin de ${repo_path:-$project_dir}." >&2
         exit 1
     fi

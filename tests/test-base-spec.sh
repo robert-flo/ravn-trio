@@ -66,4 +66,12 @@ grep -q "la rama 'spec/nope' no existe en origin" <<<"$out" || fallo "rama inexi
 [[ ! -e "$tmp/herdr.log" ]] || fallo "llamó a herdr antes de validar la base: $(cat "$tmp/herdr.log")"
 if kickoff --base spec/nope >/dev/null 2>&1; then fallo "--print-kickoff aceptó una rama inexistente"; fi
 
+# Ref exacta: «12-login» no existe aunque origin tenga spec/12-login (ls-remote --heads matchea el final).
+rm -f "$tmp/herdr.log"
+if out="$(PATH="$tmp/bin:$PATH" "$aqui/pj-trio" "$tmp/pj-demo" 42 --repo "$tmp/miembro" --base 12-login 2>&1)"; then
+  fallo "aceptó --base 12-login con solo spec/12-login en origin"
+fi
+grep -q "la rama '12-login' no existe en origin" <<<"$out" || fallo "--base 12-login sin error claro: $out"
+[[ ! -e "$tmp/herdr.log" ]] || fallo "llamó a herdr antes de validar la base: $(cat "$tmp/herdr.log")"
+
 echo "OK base del spec"
