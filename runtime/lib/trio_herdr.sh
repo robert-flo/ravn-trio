@@ -11,6 +11,8 @@ fijar_identidad_git() {
     fi
     local dirs=("$project_dir")
     [[ -n "$repo_path" ]] && dirs+=("$repo_path")
+    # La raíz de worktrees de ravn-git-bare-clone (si ya existe): sus worktrees heredan del bare.
+    [[ -n "${wt_raiz:-}" && -e "${wt_raiz}/.git" ]] && dirs+=("$wt_raiz")
     local d
     for d in "${dirs[@]}"; do
         git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || continue

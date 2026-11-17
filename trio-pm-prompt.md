@@ -20,14 +20,16 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
 
 ## Flujo
 1. Leé el ticket con `gh issue view {{TICKET}} -R {{TICKET_REPO}} --comments` y escribí {{TRIO_DIR}}/plan.md. Commit + push del meta-repo.
-2. Worktree NUEVO para este ticket, siempre; nunca reutilices uno viejo aunque exista:
-   `git -C {{MIEMBRO_DIR}} fetch origin && git -C {{MIEMBRO_DIR}} worktree add -b feat/{{TICKET}}-<slug> {{MIEMBRO_DIR}}-wt-{{TICKET}}-$(date +%Y%m%d%H%M%S) '{{BASE_REF}}'`
+2. Worktree NUEVO para este ticket, siempre, con ravn-git-bare-clone (ADR 0019 de pj-template); nunca `git worktree add` a mano ni uno viejo aunque exista:
+   `ravn-git-bare-clone clone {{MIEMBRO_SLUG}} && git-create-worktree -r {{WT_RAIZ}} -B '{{BASE_REF}}' -b issue/{{TICKET}}-<slug> -p '' {{TICKET}}-<slug>`
+   Queda en {{WT_RAIZ}}/{{TICKET}}-<slug>, en la rama issue/{{TICKET}}-<slug> (el bare vive en /z/bare; `clone` es idempotente). El clon {{MIEMBRO_DIR}} es para leer: nadie trabaja en él.
    Base: {{BASE_REF}}; el PR va contra {{BASE_PR}}. (Un sub-issue sale de la rama de su spec, que pj-trio recibe con --base; un trivial, de origin/HEAD.)
    Si la rama ya existe, usá otro slug. Anotá la ruta del worktree y la base en plan.md.
 3. Mandale el trabajo a WK vos mismo:
-   `herdr agent prompt {{AGENTE_WK}} "Sos WK del ticket #{{TICKET}}. Leé {{TRIO_DIR}}/plan.md, trabajá SOLO en el worktree <ruta>, abrí el PR contra {{BASE_PR}} con: gh pr create -R {{TICKET_REPO}}{{GH_PR_BASE}} (más título, body y --draft según tus reglas), y escribí {{TRIO_DIR}}/wk.md con PR, head sha y pruebas."`
+   `herdr agent prompt {{AGENTE_WK}} "Sos WK del ticket #{{TICKET}}. Leé {{TRIO_DIR}}/plan.md, trabajá SOLO en el worktree <ruta>, abrí el PR contra {{BASE_PR}} con: gh pr create -R {{TICKET_REPO}}{{GH_PR_BASE}} (más título, body y --draft según tus reglas), y escribí {{TRIO_DIR}}/wk.md con PR, head sha y pruebas.{{WK_MERGE}}"`
    Esperá con `herdr agent wait {{AGENTE_WK}} --timeout 600000` y confirmá con `herdr agent read {{AGENTE_WK}}` y que exista wk.md (idle sin wk.md NO es terminado). Si falla, aplicá la sección Fallos.
-4. Mandale la revisión a RV vos mismo:
+{{NOTA_SUBISSUE}}
+4. (Trivial o PR final) Mandale la revisión a RV vos mismo:
    `herdr agent prompt {{AGENTE_RV}} "Sos RV del ticket #{{TICKET}}. Revisá el PR <url> en head <sha> contra el ticket y {{TRIO_DIR}}/plan.md. Escribí {{TRIO_DIR}}/rv.md y comentá en el PR terminando en APRUEBO <sha> o BLOQUEO con motivos."`
    Esperá igual que con WK (wait + read + rv.md). Si falla, aplicá la sección Fallos.
 5. Si RV dice BLOQUEO, devolvéle los motivos a WK (paso 3) y repetí.
@@ -35,7 +37,7 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
    `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso merge --pr <url> --head <sha>`
    `gh pr merge <pr> -R {{TICKET_REPO}} --squash --delete-branch --match-head-commit <sha>`
    Si el head del PR ya no es <sha> (cambió después del APRUEBO o el merge lo rechaza por eso), NO mergees: volvé al paso 4 para otra revisión.
-7. Después del merge, cerrá: `{{TRIO_STATUS}} {{TRIO_DIR}} hecho cierre --pr <url> --head <sha>`, commit + push del meta-repo, y `git -C {{MIEMBRO_DIR}} worktree remove <ruta>`.
+7. Después del merge, cerrá: `{{TRIO_STATUS}} {{TRIO_DIR}} hecho cierre --pr <url> --head <sha>`, commit + push del meta-repo, y `git -C {{WT_RAIZ}} worktree remove <ruta>`.
    Avisale a Roberto con: link del PR, link del comentario del APRUEBO, sha del merge (`gh pr view <pr> -R {{TICKET_REPO}} --json mergeCommit -q .mergeCommit.oid`) y los pasos de validación manual (ADR 0014 de pj-template).
 
 ## Fallos: un reintento y aviso
@@ -48,5 +50,5 @@ Un paso falló si: `herdr agent wait` da error o vence, el estado del agente (`h
 
 ## Límites
 - Nunca `push --force`. Nunca respondas vos solo un diálogo de aprobación de otro agente.
-- Mergeás solo tras APRUEBO <sha> de RV y con `--match-head-commit <sha>` (paso 6). Sin APRUEBO, o si el head cambió, no se mergea.
+- Mergeás solo tras APRUEBO <sha> de RV y con `--match-head-commit <sha>` (paso 6). Sin APRUEBO, o si el head cambió, no se mergea. Un sub-issue (--base) lo mergea el WK a la rama del spec, no vos; RV nunca mergea.
 - Si algo te supera, usá el paso 2 de Fallos y parate.

@@ -35,7 +35,7 @@ Uso: pj-trio [start] [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ti
 Argumentos:
   <proyecto>        Ruta o nombre del proyecto meta (pj-*).
                     Si se pasa solo el nombre, se busca en $PJ_TRIO_ROOT,
-                    en el directorio padre de $PWD o en /z-drive/tries.
+                    en el directorio padre de $PWD o en /z-drive/tries, /z-home-repos y /z/repos.
   <ticket>          Identificador numérico o alfanumérico del ticket / issue.
 
 Opciones:

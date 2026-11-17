@@ -26,8 +26,11 @@ kickoff() { "$aqui/pj-trio" --print-kickoff "$tmp/pj-demo" 42 --repo "$tmp/miemb
 # Trivial: origin/HEAD, PR a la rama por defecto y gh pr create sin --base.
 k="$(kickoff)"
 grep -q '{{' <<<"$k" && fallo "quedan placeholders sin --base"
-grep -qE "worktree add -b feat/42-<slug> .*/miembro-wt-42-\\\$\(date \+%Y%m%d%H%M%S\) 'origin/HEAD'\`" <<<"$k" \
+grep -qE "git-create-worktree -r [^ ]+/miembro -B 'origin/HEAD' -b issue/42-<slug> -p '' 42-<slug>\`" <<<"$k" \
   || fallo "sin --base el worktree debería salir de 'origin/HEAD'"
+grep -q 'worktree add -b' <<<"$k" && fallo "queda git worktree add a mano"
+grep -q '^4\. (Trivial o PR final) Mandale la revisión a RV' <<<"$k" || fallo "un trivial pasa por RV"
+grep -q 'mergeá vos tu PR' <<<"$k" && fallo "en un trivial el WK no mergea"
 grep -q 'abrí el PR contra la rama por defecto con: gh pr create -R [^ ]* (más' <<<"$k" \
   || fallo "sin --base, gh pr create explícito y sin --base"
 
@@ -36,8 +39,11 @@ for arg in "--base spec/12-login" "--base origin/spec/12-login" "--base=spec/12-
   # shellcheck disable=SC2086 # arg lleva opción y valor a propósito.
   k="$(kickoff $arg)"
   grep -q '{{' <<<"$k" && fallo "quedan placeholders con $arg"
-  grep -qE "worktree add -b feat/42-<slug> .*/miembro-wt-42-\\\$\(date \+%Y%m%d%H%M%S\) 'origin/spec/12-login'\`" <<<"$k" \
+  grep -qE "git-create-worktree -r [^ ]+/miembro -B 'origin/spec/12-login' -b issue/42-<slug> -p '' 42-<slug>\`" <<<"$k" \
     || fallo "con $arg el worktree debería salir de 'origin/spec/12-login'"
+  grep -q 'Es un sub-issue: con CI verde y code-review limpio, mergeá vos tu PR a spec/12-login con gh pr merge <pr> -R [^ ]* --squash --delete-branch --match-head-commit <sha-verde>' <<<"$k" \
+    || fallo "con $arg el WK debería mergear su sub-issue a la rama del spec"
+  grep -q 'no hay paso RV ni merge tuyo' <<<"$k" || fallo "con $arg el PM no debería pasar el sub-issue por RV"
   grep -q "abrí el PR contra spec/12-login con: gh pr create -R [^ ]* --base 'spec/12-login'" <<<"$k" \
     || fallo "con $arg falta gh pr create --base 'spec/12-login'"
   grep -q 'origin/origin/' <<<"$k" && fallo "con $arg quedó origin/origin/"

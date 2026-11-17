@@ -50,7 +50,7 @@ Instalado: todo bajo `/usr/share/ravn/trio/` y `/usr/bin/pj-trio` → symlink al
 pj-trio [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>] [--base <rama>]
 ```
 
-- `<proyecto>`: Ruta al checkout git del proyecto meta (`pj-*`) o nombre del directorio. Si pasás únicamente el nombre, se resuelve contra la variable de entorno `$PJ_TRIO_ROOT`, o por defecto contra el directorio padre de `$PWD` o `/z-drive/tries`.
+- `<proyecto>`: Ruta al checkout git del proyecto meta (`pj-*` o un home repo `HR-*`) o nombre del directorio. Si pasás únicamente el nombre, se resuelve contra la variable de entorno `$PJ_TRIO_ROOT`, o por defecto contra el directorio padre de `$PWD` y `$PJ_TRIO_ROOTS` (default `/z-drive/tries /z-home-repos /z/repos`: clones de try, home repos `/z-home-repos/<HR-X>` y raíces de worktrees de ravn-git-bare-clone).
 - `<ticket>`: Identificador del issue o ticket a trabajar (por ejemplo `18` o `999`).
 - `--repo <miembro>`: Repositorio miembro opcional, donde vive el issue. Acepta ruta, nombre del directorio, nombre del repo en GitHub (`pj-domina-rf-git-setup` o `robert-flo/pj-domina-rf-git-setup`) o nombre corto único (`rf-git-setup`). Se busca siempre igual, sin depender de `$PWD`: subdirectorios del proyecto (layout de try-clone, `rf-<nombre>`), hermanos y las raíces `$PJ_TRIO_ROOTS` (default `/z-drive/tries`, con el prefijo de fecha de `try clone`). El PM lee el issue con `gh issue view <ticket> -R <dueño>/<miembro>` y el handoff/agentes usan la clave `<miembro>-<ticket>` (no choca el #4 de dos miembros). Los agentes abren en el clon del miembro y el meta-repo se les añade con `--add-dir`.
 - Proyecto meta ausente: si `<proyecto>` es un nombre (o `dueño/nombre`) que no está en las raíces, `pj-trio` avisa y clona **solo ese** meta-repo con try-clone (`PJ_TRIO_CLONE_CMD`, default `try exec --path {root} clone {url} | bash`, en la primera raíz de `$PJ_TRIO_ROOTS`; dueño `PJ_TRIO_OWNER`, default `robert-flo`) y sigue. En `--dry-run` solo muestra el comando; `PJ_TRIO_NO_CLONE=1` lo desactiva.
@@ -115,13 +115,14 @@ Si ejecutás `pj-trio` una segunda vez con los mismos argumentos:
 
 ### Worktree del WK
 
-El PM crea un worktree nuevo por ticket (paso 2 de `trio-pm-prompt.md`) y el WK trabaja solo ahí; nunca se reutiliza uno viejo:
+El PM crea un worktree nuevo por ticket (paso 2 de `trio-pm-prompt.md`) con [ravn-git-bare-clone](https://github.com/robert-flo/ravn-git-bare-clone) (ADR 0019 de pj-template) y el WK trabaja solo ahí; nunca se reutiliza uno viejo ni se usa `git worktree add` a mano:
 
-- Ruta: `<miembro>-wt-<ticket>-<AAAAMMDDhhmmss>`, hermana del clon del miembro (o del meta-repo sin `--repo`).
-- Rama: `feat/<ticket>-<slug>` (si ya existe, otro slug).
+- Preparación: `ravn-git-bare-clone clone <dueño>/<miembro>` (idempotente): bare en `$BARE_HOME/<miembro>.git` (`/z/bare`) y raíz de worktrees `$WORKTREES_HOME/<miembro>/` (`/z/repos`).
+- Ruta: `/z/repos/<miembro>/<ticket>-<slug>`, con `git-create-worktree -r /z/repos/<miembro> -B <base> -b issue/<ticket>-<slug> -p '' <ticket>-<slug>` (mismo nombre que `git-issue-worktree`, pero sin pedir el issue al repo del código: en un home repo el issue vive en el meta-repo).
+- Rama: `issue/<ticket>-<slug>` (si ya existe, otro slug).
 - Base: `origin/<rama del spec>` con `--base` (sub-issue) u `origin/HEAD` sin `--base` (trivial).
 - PR: el WK lo abre con `gh pr create -R <repo> --base '<rama del spec>'`. En un trivial lo abre sin `--base`, y gh usa la rama por defecto.
-- Al cerrar: `git worktree remove <ruta>`.
+- Al cerrar: `git -C /z/repos/<miembro> worktree remove <ruta>`. El clon del miembro que encontró pj-trio es para leer.
 
 ### El PM maneja a WK y RV (#60)
 
@@ -129,6 +130,7 @@ El PM crea un worktree nuevo por ticket (paso 2 de `trio-pm-prompt.md`) y el WK 
 - **Arranque automático:** con `PM_KIND=agy`, `pj-trio` renderiza `trio-pm-prompt.md` en `<proyecto>/.trio/<ticket>/kickoff.md` y arranca el PM con `agy -i "Lee y segui … .trio/<ticket>/kickoff.md"` (una sola línea: herdr rechaza argumentos con saltos de línea). Un PM recién lanzado recibe siempre el arranque, aunque ya exista `status.json`, que se conserva para que retome desde ahí. Con otro kind, lo envía con `herdr agent prompt pm-<miembro corto>-<ticket> "…"` tras esperar a que el PM quede `idle` (`TRIO_READY_TIMEOUT`, 180 s); ahí el marcador es `status.json`: si existe, no se reenvía. Si agy muestra el diálogo «Do you trust the contents of this project?», avisa con `notify-send` y espera una tecla tuya (Enter) para continuar; esa pausa no la corta `TRIO_READY_TIMEOUT`. pj-trio no escribe la confianza de agy: la gestiona la workstation (`trustedWorkspaces` con `/z-drive/tries`). Si vence o el envío falla, pegá la salida de `pj-trio --print-kickoff …`.
 - **Handoff único:** `<proyecto>/.trio/<ticket>/` con `plan.md`, `wk.md`, `rv.md` y `status.json`, commiteado en el meta-repo; nombra solo roles y nunca se duplica en los repos miembros.
 - **El PM pinguea** a WK y RV con `herdr agent prompt`, espera con `herdr agent wait … --timeout 600000` (reintenta si falla) y confirma con `herdr agent read` más el archivo de entrega.
+- **Quién mergea (ADR 0018 de pj-template, la regla de los tríos de fleet):** un sub-issue (`--base`) no pasa por RV: el WK mergea su PR a la rama del spec con CI verde y code-review limpio, y el PM lo confirma y cierra. Un trivial (o el PR final de la rama del spec) lo revisa RV y lo mergea el PM. RV nunca mergea.
 - **Merge (el PM, tras el APRUEBO):** tras `APRUEBO <sha>` de RV, el PM mergea con `gh pr merge <pr> --squash --delete-branch --match-head-commit <sha>`, usando el sha que nombró RV. Si el head cambió después del APRUEBO, no mergea y pide otra revisión. Después cierra (status `hecho`, commit + push del meta-repo, `worktree remove`) y le avisa a Roberto con el link del PR, el link del APRUEBO, el sha del merge y los pasos de validación manual (ADR 0014 de pj-template).
 - **Worktree nuevo por ticket**, siempre; ver [Worktree del WK](#worktree-del-wk).
 - **Identidad git:** `TRIO_GIT_NAME`/`TRIO_GIT_EMAIL` de la config; `pj-trio` la fija con `git config` local en el meta-repo y el miembro (los worktrees la heredan). El PM no la toca.

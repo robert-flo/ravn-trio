@@ -3,12 +3,14 @@
 # Resolución del proyecto meta, del repo miembro y de los nombres de agente.
 # shellcheck disable=SC2034,SC2154 # Globals are shared by runtime/scripts/start before these functions run.
 
-# Raíces de clones donde se buscan proyecto y miembros (try-clone / try clone).
+# Raíces donde se buscan proyecto y miembros: los clones de try (/z-drive/tries),
+# los home repos HR-* (/z-home-repos/<HR-X>) y las raíces de worktrees de
+# ravn-git-bare-clone (/z/repos/<repo>). La primera es donde clona lo que falta.
 # PJ_TRIO_ROOTS: lista separada por espacios; PJ_TRIO_ROOT se sigue aceptando.
 trio_raices() {
     local r
     # shellcheck disable=SC2086 # Lista separada por espacios a propósito.
-    for r in ${PJ_TRIO_ROOT:-} ${PJ_TRIO_ROOTS:-/z-drive/tries}; do
+    for r in ${PJ_TRIO_ROOT:-} ${PJ_TRIO_ROOTS:-/z-drive/tries /z-home-repos /z/repos}; do
         [[ -d "$r" ]] && printf '%s\n' "$r"
     done
 }
@@ -186,7 +188,7 @@ _trio_clonar_proyecto() {
     raiz="${raices[0]:-}"
     if [[ -z "$raiz" ]]; then
         # shellcheck disable=SC2086 # Lista separada por espacios a propósito.
-        set -- ${PJ_TRIO_ROOT:-} ${PJ_TRIO_ROOTS:-/z-drive/tries}
+        set -- ${PJ_TRIO_ROOT:-} ${PJ_TRIO_ROOTS:-/z-drive/tries /z-home-repos /z/repos}
         raiz="${1:-/z-drive/tries}"
     fi
     print_info "El proyecto '$proyecto_arg' no está clonado: clonando $slug en $raiz con try-clone…" >&2
@@ -200,7 +202,7 @@ _trio_clonar_proyecto() {
 
 trio_resolver_proyecto() {
     # 2. Resolución del directorio del proyecto meta: ruta, o nombre buscado en
-    # $PJ_TRIO_ROOT(S) (default /z-drive/tries) y el padre de $PWD, también con
+    # $PJ_TRIO_ROOT(S) (default /z-drive/tries /z-home-repos /z/repos) y el padre de $PWD, también con
     # el prefijo de fecha de `try clone` (AAAA-MM-DD-<dueño>-<nombre>).
     project_dir=""
     local -a raices=()
@@ -211,7 +213,7 @@ trio_resolver_proyecto() {
 
     if [[ -z "$project_dir" ]]; then
         print_error "no se encontró el directorio del proyecto '$proyecto_arg'" >&2
-        print_info "Pista: pasá una ruta existente, cloná el meta-repo (try clone) o configurá \$PJ_TRIO_ROOTS (default /z-drive/tries)." >&2
+        print_info "Pista: pasá una ruta existente, cloná el meta-repo (try clone) o configurá \$PJ_TRIO_ROOTS (default /z-drive/tries /z-home-repos /z/repos)." >&2
         exit 1
     fi
 
@@ -293,6 +295,12 @@ trio_nombres() {
 
     trio_dir="${project_dir}/.trio/${ticket_key}"
     miembro_dir="${repo_path:-$project_dir}"
+    # Worktrees con ravn-git-bare-clone (ADR 0019 de pj-template): bare en
+    # $BARE_HOME/<repo>.git y worktrees en $WORKTREES_HOME/<repo>/<ticket>-<slug>.
+    miembro_slug="${repo_slug:-${project_slug:-}}"
+    local nombre_wt="${miembro_slug#*/}"
+    [[ -n "$nombre_wt" ]] || nombre_wt="$(trio_nombre_repo "$miembro_dir")"
+    wt_raiz="${WORKTREES_HOME:-/z/repos}/${nombre_wt}"
 }
 
 # 4b. Nombres de agente: <rol>-<miembro corto>-<ticket>. herdr exige
