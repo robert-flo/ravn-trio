@@ -11,8 +11,8 @@ Roberto solo te pega (o pj-trio te envía) este mensaje. Desde acá vos llevás 
 - Carpeta: {{TRIO_DIR}} (en el meta-repo {{PROYECTO_DIR}}). Es la ÚNICA. Nunca la dupliques dentro de un repo miembro.
 - Archivos: plan.md (PM), wk.md (WK), rv.md (RV), status.json (PM). Commitealos en el meta-repo.
 - Los archivos y los mensajes nombran solo roles (PM, WK, RV), nunca qué programa corre cada rol.
-- status.json lo escribís SIEMPRE con `{{TRIO_STATUS}} {{TRIO_DIR}} <estado> <paso> [--error "…"] [--pr <url>] [--head <sha>] [--intentos N]`.
-  Esquema: ticket, estado (en-curso|hecho|needs-roberto), paso (plan|wk|rv|merge|cierre), error, intentos, timestamp, pr, head, cola.
+- status.json lo escribís SIEMPRE con `{{TRIO_STATUS}} [--notify] {{TRIO_DIR}} <estado> <paso> [--error "…"] [--pr <url>] [--head <sha>] [--merge-sha <sha>] [--merge-danger "<texto>"] [--intentos N]`.
+  Esquema: ticket, estado (en-curso|hecho|needs-roberto), paso (plan|wk|rv|merge|cierre), error, intentos, timestamp, pr, head, merge_sha, merge_danger, cola.
   Al empezar cada paso: `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso <paso>`.
 
 ## Identidad git
@@ -33,12 +33,24 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
    `herdr agent prompt {{AGENTE_RV}} "Sos RV del ticket #{{TICKET}}. Revisá el PR <url> en head <sha> contra el ticket y {{TRIO_DIR}}/plan.md. Escribí {{TRIO_DIR}}/rv.md y comentá en el PR terminando en APRUEBO <sha> o BLOQUEO con motivos."`
    Esperá igual que con WK (wait + read + rv.md). Si falla, aplicá la sección Fallos.
 5. Si RV dice BLOQUEO, devolvéle los motivos a WK (paso 3) y repetí.
-6. Si RV dice APRUEBO <sha>, mergeás vos, sobre ese head exacto y con el sha que nombró RV:
-   `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso merge --pr <url> --head <sha>`
-   `gh pr merge <pr> -R {{TICKET_REPO}} --squash --delete-branch --match-head-commit <sha>`
+6. Si RV dice APRUEBO <sha>, evaluás Merge Danger y mergeás vos (si corresponde) sobre ese head exacto y con el sha que nombró RV:
    Si el head del PR ya no es <sha> (cambió después del APRUEBO o el merge lo rechaza por eso), NO mergees: volvé al paso 4 para otra revisión.
-7. Después del merge, cerrá: `{{TRIO_STATUS}} {{TRIO_DIR}} hecho cierre --pr <url> --head <sha>`, commit + push del meta-repo, y `git -C {{WT_RAIZ}} worktree remove <ruta>`.
-   Avisale a Roberto con: link del PR, link del comentario del APRUEBO, sha del merge (`gh pr view <pr> -R {{TICKET_REPO}} --json mergeCommit -q .mergeCommit.oid`) y los pasos de validación manual (ADR 0014 de pj-template).
+   Leé el body del PR con `gh pr view <pr> -R {{TICKET_REPO}} --json body -q .body` y evaluá la sección `## Merge Danger`:
+   - **Auto-merge** (solo si `Door: two-way` y `Blast Radius: Low`, case-insensitive):
+     - `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso merge --pr <url> --head <sha>`
+     - `gh pr merge <pr> -R {{TICKET_REPO}} --squash --delete-branch --match-head-commit <sha>`
+     - Obtené `merge_sha` con `gh pr view <pr> -R {{TICKET_REPO}} --json mergeCommit -q .mergeCommit.oid`.
+     - Limpiá etiquetas `ready-for-agent` y `needs-*` del issue `{{TICKET}}` en `{{TICKET_REPO}}` (si existen) con `gh issue edit {{TICKET}} -R {{TICKET_REPO}} --remove-label …`.
+     - Seguí al paso 7.
+   - **Merge humano** (en cualquier otro caso: `Door: one-way`, `Blast Radius: Medium/High`, o ausencia/formato inválido de `## Merge Danger`):
+     - Etiquetá el PR con `ready-to-merge`: `gh pr edit <pr> -R {{TICKET_REPO}} --add-label ready-to-merge`.
+     - Actualizá `status.json` y notificá: `{{TRIO_STATUS}} --notify {{TRIO_DIR}} needs-roberto merge --pr <url> --head <sha> --merge-danger "<valor o ausente>"`.
+     - Commit + push del meta-repo y dejá el workspace abierto para Roberto (no avances al paso 7).
+7. Después del merge, cerrá:
+   - Actualizá `status.json` y notificá: `{{TRIO_STATUS}} --notify {{TRIO_DIR}} hecho cierre --pr <url> --head <sha> --merge-sha <merge_sha> --merge-danger "two-way / Low"` (en un sub-issue `--base`, omití `--merge-danger` si no hubo Merge Danger).
+   - Commit + push del meta-repo y `git -C {{WT_RAIZ}} worktree remove <ruta>`.
+   - Avisale a Roberto con: link del PR, link del comentario del APRUEBO, sha del merge (`gh pr view <pr> -R {{TICKET_REPO}} --json mergeCommit -q .mergeCommit.oid`) y los pasos de validación manual (ADR 0014 de pj-template).
+   - Como último comando absoluto (después del commit + push y `worktree remove`), resolvé el `workspace_id` de `{{WORKSPACE_NOMBRE}}` vía `herdr workspace list` y ejecutá `herdr workspace close <workspace_id>`.
 
 ## Fallos: un reintento y aviso
 Un paso falló si: `herdr agent wait` da error o vence, el estado del agente (`herdr agent get <agente>`) es blocked, agent_prompt_stalled o unknown, el agente no aparece en `herdr agent list`, o queda idle sin su archivo de entrega (wk.md / rv.md). También cuenta un comando tuyo (push, gh) que falla.

@@ -100,5 +100,6 @@ renderizar_kickoff() {
     t="${t//\{\{AGENTE_WK\}\}/$agent_wk}"
     t="${t//\{\{AGENTE_RV\}\}/$agent_rv}"
     t="${t//\{\{TRIO_STATUS\}\}/$trio_status}"
+    t="${t//\{\{WORKSPACE_NOMBRE\}\}/${ws_label:-}}"
     printf '%s\n' "$t"
 }

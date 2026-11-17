@@ -42,7 +42,7 @@ grep -qi 'UNA vez' <<<"$k" || fallo "reintento único"
 ts="$aqui/trio-status"
 d="$tmp/pj-demo/.trio/43"
 out="$("$ts" --dry-run --notify "$d" needs-roberto wk --error x 2>&1)"
-grep -q 'notify-send' <<<"$out" || fallo "dry-run sin notify-send"
+grep -qE 'herdr notification show|notify-send' <<<"$out" || fallo "dry-run sin notificación"
 [[ ! -e "$d" ]] || fallo "trio-status --dry-run escribió"
 "$ts" "$d" en-curso wk --pr https://e/pr/1 --head abc
 mkdir -p "$tmp/bin"
