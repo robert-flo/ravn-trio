@@ -52,7 +52,7 @@ grep -q '{{' <<<"$k" && fallo "quedan placeholders sin sustituir en kickoff"
 grep -qF 'trio pj-demo/miembro#42' <<<"$k" || fallo "{{WORKSPACE_NOMBRE}} no se sustituyó en kickoff"
 
 # Versión en herdr-plugin.toml.
-grep -qFx 'version = "0.1.11"' "$aqui/herdr-plugin.toml" || fallo "herdr-plugin.toml debe estar en version = \"0.1.11\""
+grep -qFx 'version = "0.1.12"' "$aqui/herdr-plugin.toml" || fallo "herdr-plugin.toml debe estar en version = \"0.1.12\""
 
 # El WK abre el PR con gh pr create explícito y la base del ticket.
 grep -qF 'gh pr create -R {{TICKET_REPO}}{{GH_PR_BASE}}' "$prompt" || fallo "falta gh pr create con la base en el encargo al WK"
