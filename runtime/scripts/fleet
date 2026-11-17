@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+
+# Fleet command module: estado consolidado de los tríos en <proyecto>/.trio/*/status.json.
+# shellcheck disable=SC2034,SC2154 # Globals are shared with runtime/lib/trio_project.sh.
+set -Eeuo pipefail
+
+module_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091 # Resolved from the project root.
+source "$module_dir/../helper/set_variable.sh"
+PROJECT_DIR="$TRIO_RUNTIME_DIR"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/presentation.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/trio_project.sh"
+
+show_fleet_help() {
+  print_section "Fleet Status Usage"
+  cat <<'HELP_EOF'
+  Uso: pj-trio fleet <proyecto> [--activos] [--json]
+
+  Argumentos:
+    <proyecto>    Ruta o nombre del proyecto meta (pj-* / HR-*).
+
+  Opciones:
+    --activos     Muestra solo tríos con estado en-curso, needs-roberto o workspace abierto.
+    --json        Imprime el resultado como array JSON.
+    -h, --help    Muestra esta ayuda.
+HELP_EOF
+}
+
+activos=0
+json_out=0
+positional=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --activos)
+      activos=1
+      shift
+      ;;
+    --json)
+      json_out=1
+      shift
+      ;;
+    -h|--help)
+      show_fleet_help
+      exit 0
+      ;;
+    --)
+      shift
+      positional+=("$@")
+      break
+      ;;
+    -*)
+      print_error "opción desconocida: $1" >&2
+      exit 1
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ ${#positional[@]} -ne 1 ]]; then
+  print_error "se requiere <proyecto>." >&2
+  show_fleet_help >&2
+  exit 1
+fi
+
+proyecto_arg="${positional[0]}"
+repo_arg=""
+ticket=""
+export PJ_TRIO_NO_CLONE="${PJ_TRIO_NO_CLONE:-1}"
+trio_resolver_proyecto
+
+# Recolectar archivos status.json
+shopt -s nullglob
+status_files=("$project_dir/.trio"/*/status.json)
+shopt -u nullglob
+
+if [[ ${#status_files[@]} -eq 0 ]]; then
+  if [[ "$json_out" -eq 1 ]]; then
+    echo "[]"
+  else
+    print_info "No hay tríos registrados en ${project_name}."
+  fi
+  exit 0
+fi
+
+# Consultar herdr workspace list una sola vez si está disponible
+herdr_ok=0
+declare -A ws_by_label=()
+if command -v herdr >/dev/null 2>&1; then
+  ws_json="$(herdr workspace list 2>/dev/null || true)"
+  if [[ -n "$ws_json" ]] && jq -e '.result.workspaces' >/dev/null 2>&1 <<<"$ws_json"; then
+    herdr_ok=1
+    while IFS=$'\t' read -r w_label w_id; do
+      [[ -n "$w_label" ]] && ws_by_label["$w_label"]="$w_id"
+    done < <(jq -r '.result.workspaces[]? | [(.label // ""), (.workspace_id // "")] | @tsv' <<<"$ws_json")
+  fi
+fi
+
+# Construir filas
+items_json="[]"
+for status_file in "${status_files[@]}"; do
+  clave="$(basename "$(dirname "$status_file")")"
+  if ! raw_status="$(jq -e '.' "$status_file" 2>/dev/null)"; then
+    print_warn "status.json inválido en ${clave}; se omite." >&2
+    continue
+  fi
+
+  # Derivar repo_name y ticket_num para reconstruir ws_label y nombre del agente PM
+  if [[ "$clave" =~ ^(.+)-([0-9]+)$ ]]; then
+    repo_name="${BASH_REMATCH[1]}"
+    ticket="${BASH_REMATCH[2]}"
+    ws_label_lookup="trio ${project_name}/${repo_name}#${ticket}"
+  else
+    repo_name=""
+    ticket="$clave"
+    ws_label_lookup="trio ${project_name}#${ticket}"
+  fi
+  pm_agent="$(nombre_agente pm)"
+
+  workspace_id=""
+  pm_herdr_status="unavailable"
+  if [[ "$herdr_ok" -eq 1 ]]; then
+    workspace_id="${ws_by_label[$ws_label_lookup]:-}"
+    agent_json="$(herdr agent get "$pm_agent" 2>/dev/null || true)"
+    if [[ -n "$agent_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$agent_json"; then
+      pm_herdr_status="$(jq -r '.result.agent.agent_status // "cerrado"' <<<"$agent_json")"
+      if [[ -z "$workspace_id" ]]; then
+        workspace_id="$(jq -r '.result.agent.workspace_id // ""' <<<"$agent_json")"
+      fi
+    else
+      pm_herdr_status="cerrado"
+    fi
+  fi
+
+  estado="$(jq -r '.estado // ""' <<<"$raw_status")"
+  if [[ "$activos" -eq 1 ]]; then
+    if [[ "$estado" != "en-curso" && "$estado" != "needs-roberto" && -z "$workspace_id" ]]; then
+      continue
+    fi
+  fi
+
+  item="$(jq -n \
+    --argjson s "$raw_status" \
+    --arg clave "$clave" \
+    --arg pm_status "$pm_herdr_status" \
+    --arg ws_id "$workspace_id" \
+    '{
+      clave: $clave,
+      ticket: ($s.ticket // $clave),
+      estado: ($s.estado // ""),
+      paso: ($s.paso // ""),
+      pm_herdr_status: $pm_status,
+      workspace_id: $ws_id,
+      pr: ($s.pr // ""),
+      head: ($s.head // ""),
+      merge_danger: ($s.merge_danger // ""),
+      timestamp: ($s.timestamp // "")
+    }')"
+
+  items_json="$(jq -n --argjson arr "$items_json" --argjson item "$item" '$arr + [$item]')"
+done
+
+if [[ "$json_out" -eq 1 ]]; then
+  jq '.' <<<"$items_json"
+  exit 0
+fi
+
+count="$(jq 'length' <<<"$items_json")"
+print_section "Fleet — ${project_name} (${count})"
+
+if [[ "$count" -eq 0 ]]; then
+  print_info "No hay tríos que coincidan con el filtro."
+  exit 0
+fi
+
+if [[ "$herdr_ok" -eq 0 ]]; then
+  print_warn "herdr no disponible; pm_herdr_status=unavailable."
+fi
+
+printf "  %-18s %-14s %-8s %-12s %-5s %-16s %s\n" \
+  "CLAVE" "ESTADO" "PASO" "PM" "WS" "DANGER" "PR"
+printf "  %-18s %-14s %-8s %-12s %-5s %-16s %s\n" \
+  "------------------" "--------------" "--------" "------------" "-----" "----------------" "--"
+
+while IFS=$'\t' read -r c_clave c_estado c_paso c_pm c_ws c_danger c_pr; do
+  printf "  %-18s %-14s %-8s %-12s %-5s %-16s %s\n" \
+    "$c_clave" "$c_estado" "$c_paso" "$c_pm" "$c_ws" "$c_danger" "$c_pr"
+done < <(jq -r '.[] | [
+  (if .clave == "" then "-" else .clave end),
+  (if .estado == "" then "-" else .estado end),
+  (if .paso == "" then "-" else .paso end),
+  (if .pm_herdr_status == "" then "-" else .pm_herdr_status end),
+  (if .workspace_id == "" then "-" else .workspace_id end),
+  (if .merge_danger == "" then "-" else .merge_danger end),
+  (if .pr == "" then "-" else .pr end)
+] | @tsv' <<<"$items_json")
