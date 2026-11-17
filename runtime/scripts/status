@@ -13,17 +13,20 @@ show_status_help() {
   print_section "Trio Status Usage"
   cat << 'HELP_EOF'
   Uso: trio-status [--dry-run] [--notify] [--cola-de <agente>] [--error <texto>]
-                   [--pr <url>] [--head <sha>] <trio_dir> <estado> <paso>
+                   [--pr <url>] [--head <sha>] [--merge-sha <sha>]
+                   [--merge-danger <texto>] <trio_dir> <estado> <paso>
 
   Esquema de status.json (las claves no indicadas se conservan del archivo previo):
-    ticket     id del ticket (nombre de <trio_dir>)
-    estado     en-curso | hecho | needs-roberto
-    paso       plan | wk | rv | merge | cierre
-    error      motivo del fallo ("" si no hay)
-    intentos   intentos hechos en el paso actual (1 o 2)
-    timestamp  ISO 8601 con zona
-    pr, head   PR y sha en juego (opcionales)
-    cola       últimas líneas del panel del agente que falló (opcional)
+    ticket        id del ticket (nombre de <trio_dir>)
+    estado        en-curso | hecho | needs-roberto
+    paso          plan | wk | rv | merge | cierre
+    error         motivo del fallo ("" si no hay)
+    intentos      intentos hechos en el paso actual (1 o 2)
+    timestamp     ISO 8601 con zona
+    pr, head      PR y sha en juego (opcionales)
+    merge_sha     sha del commit de merge (opcional)
+    merge_danger  evaluación Merge Danger del PR (opcional)
+    cola          últimas líneas del panel del agente que falló (opcional)
 HELP_EOF
 }
 
@@ -33,6 +36,8 @@ cola_de=""
 error=""
 pr=""
 head=""
+merge_sha=""
+merge_danger=""
 intentos=""
 pos=()
 while [[ $# -gt 0 ]]; do
@@ -43,6 +48,8 @@ while [[ $# -gt 0 ]]; do
         --error) error="${2:?}"; shift 2 ;;
         --pr) pr="${2:?}"; shift 2 ;;
         --head) head="${2:?}"; shift 2 ;;
+        --merge-sha) merge_sha="${2:?}"; shift 2 ;;
+        --merge-danger) merge_danger="${2:?}"; shift 2 ;;
         --intentos) intentos="${2:?}"; shift 2 ;;
         -h|--help) show_status_help; exit 0 ;;
         *) pos+=("$1"); shift ;;
@@ -62,27 +69,45 @@ previo="{}"
 [[ -f "$trio_dir/status.json" ]] && previo="$(cat "$trio_dir/status.json")"
 json="$(jq -n --argjson p "$previo" --arg ticket "$(basename "$trio_dir")" --arg estado "$estado" \
     --arg paso "$paso" --arg error "$error" --arg ts "$(date --iso-8601=seconds)" \
-    --arg pr "$pr" --arg head "$head" --arg cola "$cola" --arg intentos "$intentos" '
+    --arg pr "$pr" --arg head "$head" --arg merge_sha "$merge_sha" --arg merge_danger "$merge_danger" \
+    --arg cola "$cola" --arg intentos "$intentos" '
     $p + {ticket: $ticket, estado: $estado, paso: $paso, error: $error, timestamp: $ts}
     + (if $pr != "" then {pr: $pr} else {} end)
     + (if $head != "" then {head: $head} else {} end)
+    + (if $merge_sha != "" then {merge_sha: $merge_sha} else {} end)
+    + (if $merge_danger != "" then {merge_danger: $merge_danger} else {} end)
     + (if $intentos != "" then {intentos: ($intentos|tonumber)} else {} end)
     + (if $cola != "" then {cola: $cola} else {} end)
     | del(.fase)')"
 
 titulo="trío #$(basename "$trio_dir"): $estado"
 cuerpo="paso $paso${error:+: $error}"
+sonido="none"
+case "$estado" in
+    hecho) sonido="done" ;;
+    needs-roberto) sonido="request" ;;
+    en-curso) sonido="none" ;;
+esac
+
 if [[ "$dry_run" -eq 1 ]]; then
     echo "[dry-run] escribir $trio_dir/status.json"
     echo "$json"
-    [[ "$notify" -eq 1 ]] && echo "[dry-run] notify-send -u critical \"$titulo\" \"$cuerpo\""
+    if [[ "$notify" -eq 1 ]]; then
+        if command -v herdr >/dev/null 2>&1; then
+            echo "[dry-run] herdr notification show \"$titulo\" --body \"$cuerpo\" --sound \"$sonido\""
+        else
+            echo "[dry-run] notify-send -u critical \"$titulo\" \"$cuerpo\""
+        fi
+    fi
     exit 0
 fi
 
 mkdir -p "$trio_dir"
 printf '%s\n' "$json" > "$trio_dir/status.json"
 if [[ "$notify" -eq 1 ]]; then
-    if command -v notify-send >/dev/null 2>&1; then
+    if command -v herdr >/dev/null 2>&1 && herdr notification show "$titulo" --body "$cuerpo" --sound "$sonido"; then
+        :
+    elif command -v notify-send >/dev/null 2>&1; then
         notify-send -u critical "$titulo" "$cuerpo" || print_warn "notify-send falló." >&2
     else
         print_warn "notify-send no está en el PATH; solo quedó status.json." >&2
