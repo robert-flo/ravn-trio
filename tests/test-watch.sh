@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pruebas de `pj-trio watch`: diff contra --snapshot, cambio de paso/estado, blocked, timeout y alias w.
+# Pruebas de `pj-trio watch`: modo accionable por defecto, --verbose para pasos, blocked, salida legible, timeout y alias w.
 set -euo pipefail
 
 aqui="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,12 +47,39 @@ EOF
 chmod +x "$tmp/bin_stubs/herdr"
 
 inotify_mode="$tmp/inotify_mode"
+inotify_step="$tmp/inotify_step"
 echo "noop" > "$inotify_mode"
+echo "0" > "$inotify_step"
 
 cat > "$tmp/bin_stubs/inotifywait" <<EOF
 #!/usr/bin/env bash
 mode="\$(cat "$inotify_mode" 2>/dev/null || echo noop)"
 case "\$mode" in
+  absorb_pasos_then_hecho)
+    step="\$(cat "$inotify_step" 2>/dev/null || echo 0)"
+    step=\$(( step + 1 ))
+    echo "\$step" > "$inotify_step"
+    if [[ "\$step" -eq 1 ]]; then
+      cat > "$pj/.trio/ravn-trio-21/status.json" <<'JSON'
+{
+  "ticket": "ravn-trio-21",
+  "estado": "en-curso",
+  "paso": "rv",
+  "timestamp": "2026-11-17T09:05:00-06:00"
+}
+JSON
+      exit 0
+    fi
+    cat > "$pj/.trio/ravn-trio-21/status.json" <<'JSON'
+{
+  "ticket": "ravn-trio-21",
+  "estado": "hecho",
+  "paso": "merge",
+  "timestamp": "2026-11-17T09:08:00-06:00"
+}
+JSON
+    exit 0
+    ;;
   change_paso)
     cat > "$pj/.trio/ravn-trio-21/status.json" <<'JSON'
 {
@@ -86,7 +113,7 @@ esac
 EOF
 chmod +x "$tmp/bin_stubs/inotifywait"
 
-# 1. Diff inmediato contra --snapshot previo (sin entrar al loop de inotifywait)
+# 1. Modo --verbose: diff inmediato contra --snapshot por cambio de paso
 snap="$tmp/snap.json"
 cat > "$snap" <<'EOF'
 {
@@ -105,27 +132,84 @@ cat > "$snap" <<'EOF'
 }
 EOF
 
-out_snap="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --snapshot "$snap" --json)"
+out_snap="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --snapshot "$snap" --verbose --json)"
 jq -e '.status == "changed" and (.events | length == 1) and .events[0].tipo == "paso" and .events[0].paso == "wk"' <<<"$out_snap" >/dev/null \
-  || fallo "diff contra --snapshot inesperado: $out_snap"
+  || fallo "diff con --verbose contra --snapshot inesperado: $out_snap"
 jq -e '.["ravn-trio-21"].paso == "wk"' "$snap" >/dev/null \
-  || fallo "snapshot no se actualizó tras diff"
+  || fallo "snapshot no se actualizó tras diff --verbose"
 
-# 2. Detección de cambio de paso vía inotifywait y alias w
+# 2. Modo --verbose: detección de cambio de paso vía inotifywait y alias w
 echo "change_paso" > "$inotify_mode"
-out_paso="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" w "$pj" --snapshot "$snap" --timeout 10 --json)"
+out_paso="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" w "$pj" --snapshot "$snap" --timeout 10 --verbose --json)"
 jq -e '.status == "changed" and .events[0].tipo == "paso" and .events[0].prev_paso == "wk" and .events[0].paso == "rv"' <<<"$out_paso" >/dev/null \
-  || fallo "detección de cambio de paso falló: $out_paso"
+  || fallo "detección de cambio de paso con --verbose falló: $out_paso"
 
-# 3. Detección de needs-roberto con captura de últimas 25 líneas de herdr agent read
+# 3. Modo por defecto: absorbe plan -> wk -> rv (actualizando snapshot) y despierta en hecho
+cat > "$pj/.trio/ravn-trio-21/status.json" <<'EOF'
+{
+  "ticket": "ravn-trio-21",
+  "estado": "en-curso",
+  "paso": "wk",
+  "timestamp": "2026-11-17T09:00:00-06:00"
+}
+EOF
+cat > "$snap" <<'EOF'
+{
+  "ravn-trio-21": {
+    "clave": "ravn-trio-21",
+    "ticket": "ravn-trio-21",
+    "estado": "en-curso",
+    "paso": "plan",
+    "pm_agent": "pm-ravn-trio-21",
+    "pm_herdr_status": "running",
+    "pr": "",
+    "head": "",
+    "merge_danger": "",
+    "timestamp": "2026-11-17T08:55:00-06:00"
+  }
+}
+EOF
+echo "absorb_pasos_then_hecho" > "$inotify_mode"
+echo "0" > "$inotify_step"
+out_hecho="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --snapshot "$snap" --timeout 10 --json)"
+jq -e '.status == "changed" and (.events | length == 1) and .events[0].tipo == "estado" and .events[0].estado == "hecho" and .events[0].prev_estado == "en-curso"' <<<"$out_hecho" >/dev/null \
+  || fallo "modo por defecto debía absorber pasos y despertar en hecho: $out_hecho"
+jq -e '.["ravn-trio-21"].estado == "hecho" and .["ravn-trio-21"].paso == "merge"' "$snap" >/dev/null \
+  || fallo "snapshot no se actualizó tras hecho"
+
+# 3b. Modo por defecto: ticket nuevo en en-curso no despierta; ticket nuevo en hecho sí despierta
+mkdir -p "$pj/.trio/ravn-trio-22"
+cat > "$pj/.trio/ravn-trio-22/status.json" <<'EOF'
+{
+  "ticket": "ravn-trio-22",
+  "estado": "en-curso",
+  "paso": "plan",
+  "timestamp": "2026-11-17T09:09:00-06:00"
+}
+EOF
 echo "change_needs_roberto" > "$inotify_mode"
 out_nr="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --snapshot "$snap" --timeout 10 --json)"
-jq -e '.status == "changed" and .events[0].tipo == "estado" and .events[0].estado == "needs-roberto"' <<<"$out_nr" >/dev/null \
-  || fallo "detección de needs-roberto falló: $out_nr"
+jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == "ravn-trio-21" and .events[0].tipo == "estado" and .events[0].estado == "needs-roberto"' <<<"$out_nr" >/dev/null \
+  || fallo "detección de needs-roberto (ignorando nuevo en-curso) falló: $out_nr"
 tail_lines="$(jq -r '.events[0].tail' <<<"$out_nr" | wc -l)"
 [[ "$tail_lines" -eq 25 ]] || fallo "esperaba 25 líneas en tail, obtuve $tail_lines"
 jq -r '.events[0].tail' <<<"$out_nr" | grep -q 'linea-30 de pm-ravn-trio-21' \
   || fallo "tail no contiene la última línea esperada"
+
+mkdir -p "$pj/.trio/ravn-trio-23"
+cat > "$pj/.trio/ravn-trio-23/status.json" <<'EOF'
+{
+  "ticket": "ravn-trio-23",
+  "estado": "hecho",
+  "paso": "merge",
+  "timestamp": "2026-11-17T09:12:00-06:00"
+}
+EOF
+out_nuevo_hecho="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --snapshot "$snap" --timeout 10 --json)"
+jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == "ravn-trio-23" and .events[0].tipo == "nuevo" and .events[0].estado == "hecho"' <<<"$out_nuevo_hecho" >/dev/null \
+  || fallo "ticket nuevo ya en hecho debía despertar: $out_nuevo_hecho"
+
+rm -rf "$pj/.trio/ravn-trio-22" "$pj/.trio/ravn-trio-23"
 
 # 4. Detección de blocked en herdr agent get dentro del loop sin cambios en status.json
 cat > "$pj/.trio/ravn-trio-21/status.json" <<'EOF'
