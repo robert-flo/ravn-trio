@@ -16,7 +16,7 @@ source "$PROJECT_DIR/lib/trio_project.sh"
 show_watch_help() {
   print_section "Watch Usage"
   cat <<'HELP_EOF'
-  Uso: pj-trio watch <proyecto> [--snapshot <archivo>] [--timeout <seg>] [--json]
+  Uso: pj-trio watch <proyecto> [--snapshot <archivo>] [--timeout <seg>] [--verbose] [--json]
 
   Argumentos:
     <proyecto>            Ruta o nombre del proyecto meta (pj-* / HR-*).
@@ -24,6 +24,7 @@ show_watch_help() {
   Opciones:
     --snapshot <archivo>  Archivo JSON de snapshot previo/actual para detectar cambios inmediatos.
     --timeout <seg>       Tiempo máximo de espera en segundos (default: 1800). Sale con 124 si vence.
+    --verbose             Despierta también en cambios de paso o tickets nuevos no terminales.
     --json                Imprime el resultado como JSON.
     -h, --help            Muestra esta ayuda.
 HELP_EOF
@@ -31,6 +32,7 @@ HELP_EOF
 
 snapshot_file=""
 timeout_sec=1800
+verbose=0
 json_out=0
 positional=()
 
@@ -51,6 +53,10 @@ while [[ $# -gt 0 ]]; do
       fi
       timeout_sec="$2"
       shift 2
+      ;;
+    --verbose)
+      verbose=1
+      shift
       ;;
     --json)
       json_out=1
@@ -165,16 +171,26 @@ collect_snapshot() {
 diff_snapshots() {
   local prev_json="$1"
   local curr_json="$2"
-  jq -n --argjson prev "$prev_json" --argjson curr "$curr_json" '
+  jq -n --argjson prev "$prev_json" --argjson curr "$curr_json" --argjson verbose "$verbose" '
     [
       ($curr | keys_unsorted[]) as $k
       | ($prev[$k] // null) as $p
       | $curr[$k] as $c
       | select(
-          ($p == null)
-          or ($c.estado != $p.estado)
-          or ($c.paso != $p.paso)
-          or (($c.pm_herdr_status != $p.pm_herdr_status) and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
+          if $verbose == 1 then
+            ($p == null)
+            or ($c.estado != $p.estado)
+            or ($c.paso != $p.paso)
+            or (($c.pm_herdr_status != $p.pm_herdr_status) and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
+          else
+            if $p == null then
+              ($c.estado == "hecho" or $c.estado == "needs-roberto")
+              or ($c.estado == "en-curso" and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
+            else
+              (($c.estado != $p.estado) and ($c.estado == "hecho" or $c.estado == "needs-roberto"))
+              or ($c.estado == "en-curso" and ($c.pm_herdr_status != $p.pm_herdr_status) and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
+            end
+          end
         )
       | {
           clave: $c.clave,
@@ -319,6 +335,9 @@ while true; do
     write_snapshot "$curr_snapshot"
     enrich_and_emit "$events"
     exit 0
+  fi
+  if [[ "$curr_snapshot" != "$baseline" ]]; then
+    write_snapshot "$curr_snapshot"
   fi
   baseline="$curr_snapshot"
 done
