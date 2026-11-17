@@ -46,6 +46,8 @@ grep -qE 'herdr notification show|notify-send' <<<"$out" || fallo "dry-run sin n
 [[ ! -e "$d" ]] || fallo "trio-status --dry-run escribió"
 "$ts" "$d" en-curso wk --pr https://e/pr/1 --head abc
 mkdir -p "$tmp/bin"
+printf '#!/bin/sh\nexit 1\n' > "$tmp/bin/herdr"
+chmod +x "$tmp/bin/herdr"
 printf '#!/bin/sh\necho "$@" > "%s/notificado"\n' "$tmp" > "$tmp/bin/notify-send"
 chmod +x "$tmp/bin/notify-send"
 PATH="$tmp/bin:$PATH" "$ts" --notify "$d" needs-roberto wk --intentos 2 --error "wk ausente"

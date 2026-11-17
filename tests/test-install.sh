@@ -11,6 +11,7 @@ test -x "$dest/usr/share/ravn/trio/runtime/scripts/start"
 "$dest/usr/share/ravn/trio/pj-trio" help >/dev/null
 test -x "$dest/usr/share/ravn/trio/trio-status"
 test -f "$dest/usr/share/ravn/trio/trio-pm-prompt.md"
+test -f "$dest/usr/share/ravn/trio/trio-os-prompt.md"
 test -f "$dest/usr/share/ravn/trio/trio.conf.example"
 test -f "$dest/usr/share/ravn/trio/herdr-plugin.toml"
 test -x "$dest/usr/share/ravn/trio/runtime/plugin/new-trio"

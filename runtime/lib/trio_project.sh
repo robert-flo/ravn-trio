@@ -292,6 +292,7 @@ trio_nombres() {
     agent_pm="$(nombre_agente pm)"
     agent_wk="$(nombre_agente wk)"
     agent_rv="$(nombre_agente rv)"
+    agent_os="$(nombre_agente os)"
 
     trio_dir="${project_dir}/.trio/${ticket_key}"
     miembro_dir="${repo_path:-$project_dir}"

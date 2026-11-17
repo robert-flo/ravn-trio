@@ -26,23 +26,29 @@ fijar_identidad_git() {
     done
 }
 
-# Envío del arranque al PM: una sola vez por ticket (marcador status.json).
+# Envío del arranque al PM o al OS: una sola vez por ticket (marcador status.json).
 enviar_kickoff() {
-    if [[ "$kickoff" -eq 0 || -z "$PM_KIND" ]]; then
+    local target_rol="pm" target_kind="$PM_KIND" target_agent="$agent_pm"
+    if [[ "${modo_oneshot:-0}" -eq 1 ]]; then
+        target_rol="os"
+        target_kind="$OS_KIND"
+        target_agent="$agent_os"
+    fi
+    if [[ "$kickoff" -eq 0 || -z "$target_kind" ]]; then
         return 0
     fi
     if [[ "${pm_fallo_inicio:-0}" -eq 1 ]]; then
         return 0
     fi
     if [[ "${pm_duplicado:-0}" -eq 1 ]]; then
-        print_warn "${agent_pm} ya corre en otro pane; no envío el arranque ni escribo status.json." >&2
+        print_warn "${target_agent} ya corre en otro pane; no envío el arranque ni escribo status.json." >&2
         return 0
     fi
     if [[ "${kickoff_en_arranque:-0}" -eq 1 ]]; then
         # agy ya recibió el arranque con -i/--prompt-interactive al iniciar.
-        echo "Arranque enviado a ${agent_pm} al iniciar agy (-i, sesión interactiva)."
+        echo "Arranque enviado a ${target_agent} al iniciar agy (-i, sesión interactiva)."
         if [[ -f "${trio_dir}/status.json" ]]; then
-            echo "status.json ya existía; se conserva (el PM retoma desde ahí)."
+            echo "status.json ya existía; se conserva (el agente retoma desde ahí)."
         elif [[ "$dry_run" -eq 1 ]]; then
             "$trio_status" --dry-run "$trio_dir" en-curso plan
         else
@@ -58,18 +64,18 @@ enviar_kickoff() {
     texto="$(renderizar_kickoff)" || return 1
     if [[ "$dry_run" -eq 1 ]]; then
         echo "[dry-run] mkdir -p \"$trio_dir\""
-        echo "[dry-run] herdr agent prompt \"$agent_pm\" \"<trio-pm-prompt.md renderizado>\""
+        echo "[dry-run] herdr agent prompt \"$target_agent\" \"<trio-${target_rol}-prompt.md renderizado>\""
         "$trio_status" --dry-run "$trio_dir" en-curso plan
         return 0
     fi
-    if ! esperar_agente_listo "$agent_pm"; then
-        print_warn "${agent_pm} no quedó listo a tiempo; no envío el arranque." >&2
+    if ! esperar_agente_listo "$target_agent"; then
+        print_warn "${target_agent} no quedó listo a tiempo; no envío el arranque." >&2
         print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}" >&2
         return 0
     fi
     local out
-    if ! out="$(herdr agent prompt "$agent_pm" "$texto" 2>&1)"; then
-        print_warn "no se pudo enviar el arranque a ${agent_pm}: ${out}" >&2
+    if ! out="$(herdr agent prompt "$target_agent" "$texto" 2>&1)"; then
+        print_warn "no se pudo enviar el arranque a ${target_agent}: ${out}" >&2
         print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}" >&2
         return 0
     fi
@@ -78,8 +84,19 @@ enviar_kickoff() {
 
 # 5. Verificación de agentes disponibles para agy
 verificar_agentes_disponibles() {
+    local roles=(PM WK RV)
+    if [[ "${modo_oneshot:-0}" -eq 1 ]]; then
+        roles=(OS)
+    fi
     local necesita_agy=0
-    for k in "$PM_KIND" "$WK_KIND" "$RV_KIND"; do
+    for role in "${roles[@]}"; do
+        local k=""
+        case "$role" in
+            PM) k="$PM_KIND" ;;
+            WK) k="$WK_KIND" ;;
+            RV) k="$RV_KIND" ;;
+            OS) k="$OS_KIND" ;;
+        esac
         if [[ "$k" == agy ]]; then
             necesita_agy=1
             break
@@ -97,12 +114,13 @@ verificar_agentes_disponibles() {
         fi
         local available_agents
         available_agents="$(agy agents 2>/dev/null || true)"
-        for role in PM WK RV; do
+        for role in "${roles[@]}"; do
             local k=""
             case "$role" in
                 PM) k="$PM_KIND" ;;
                 WK) k="$WK_KIND" ;;
                 RV) k="$RV_KIND" ;;
+                OS) k="$OS_KIND" ;;
             esac
             if [[ "$k" == agy ]]; then
                 local expected="${role}-${project_name}"
@@ -119,7 +137,18 @@ verificar_agentes_disponibles() {
 # 6. Instalación idempotente de integraciones de herdr
 instalar_integraciones() {
     local kinds=()
-    for k in "$PM_KIND" "$WK_KIND" "$RV_KIND"; do
+    local roles=(PM WK RV)
+    if [[ "${modo_oneshot:-0}" -eq 1 ]]; then
+        roles=(OS)
+    fi
+    for role in "${roles[@]}"; do
+        local k=""
+        case "$role" in
+            PM) k="$PM_KIND" ;;
+            WK) k="$WK_KIND" ;;
+            RV) k="$RV_KIND" ;;
+            OS) k="$OS_KIND" ;;
+        esac
         [[ -z "$k" ]] && continue
         local target="$k"
         if [[ "$k" == agy && -n "${TRIO_HERDR_INTEGRATION_AGY:-}" ]]; then
@@ -194,7 +223,7 @@ iniciar_agente_rol() {
     if echo "$live_agents" | jq -e --arg n "$agent_name" \
         '.result.agents[]? | select(.name == $n)' >/dev/null 2>&1; then
         print_warn "el agente '${agent_name}' ya corre en otro pane; ese ticket ya tiene su trío abierto." >&2
-        [[ "$role" == "PM" ]] && pm_duplicado=1
+        [[ "$role" == "PM" || "$role" == "OS" ]] && pm_duplicado=1
         return 0
     fi
 
@@ -214,19 +243,19 @@ iniciar_agente_rol() {
     # herdr 0.9.5 rechaza argumentos con caracteres de control (saltos de línea)
     # (herdrdev/herdr src/app/agents.rs:159, error invalid_agent_argument): el
     # arranque va a un archivo y -i lleva solo una línea que apunta a él.
-    local kickoff_pm=0
-    # Un PM recién lanzado no tiene contexto: recibe siempre el arranque, aunque
-    # exista status.json (p. ej. de un intento anterior en que el PM no arrancó).
-    if [[ "$role" == PM && "$kind" == agy && "$kickoff" -eq 1 ]]; then
+    local kickoff_target=0
+    # Un PM o OS recién lanzado no tiene contexto: recibe siempre el arranque, aunque
+    # exista status.json (p. ej. de un intento anterior en que no arrancó).
+    if [[ ("$role" == PM || "$role" == OS) && "$kind" == agy && "$kickoff" -eq 1 ]]; then
         if [[ -f "${trio_dir}/status.json" ]]; then
-            echo "PM: existe ${trio_dir}/status.json, pero el PM es nuevo: le paso el arranque igual."
+            echo "${role}: existe ${trio_dir}/status.json, pero el ${role} es nuevo: le paso el arranque igual."
         fi
         local archivo_kickoff="${trio_dir}/kickoff.md"
         mkdir -p "$trio_dir"
         if renderizar_kickoff > "$archivo_kickoff"; then
             agent_args+=(-i "Lee y segui al pie de la letra las instrucciones de arranque del archivo ${archivo_kickoff}")
-            kickoff_pm=1
-            echo "PM: arranco agy con -i apuntando al arranque en ${archivo_kickoff} (ticket ${ticket})."
+            kickoff_target=1
+            echo "${role}: arranco agy con -i apuntando al arranque en ${archivo_kickoff} (ticket ${ticket})."
         fi
     fi
 
@@ -238,9 +267,9 @@ iniciar_agente_rol() {
         # comando en el pane) significan que agy se lanzó aunque herdr no lo confirmó.
         if echo "$start_output" | jq -e '.error.code == "agent_not_ready" or .error.code == "timeout"' >/dev/null 2>&1; then
             print_warn "${role}: herdr no confirmó el arranque a tiempo (diálogo de confianza?); agy ya quedó lanzado en ${pane_id}." >&2
-            if [[ "$kickoff_pm" -eq 1 ]]; then kickoff_en_arranque=1; fi
+            if [[ "$kickoff_target" -eq 1 ]]; then kickoff_en_arranque=1; fi
         else
-            if [[ "$role" == PM ]]; then pm_fallo_inicio=1; fi
+            if [[ "$role" == PM || "$role" == OS ]]; then pm_fallo_inicio=1; fi
             local err_msg
             err_msg="$(echo "$start_output" | jq -r '.error.message // empty' 2>/dev/null || true)"
             if [[ -n "$err_msg" ]]; then
@@ -248,12 +277,12 @@ iniciar_agente_rol() {
             else
                 print_warn "no se pudo iniciar automáticamente el agente para ${role}: ${start_output}" >&2
             fi
-            if [[ "$role" == PM ]]; then
-                print_error "el PM no arrancó; no se envía el arranque ni se marca status.json." >&2
+            if [[ "$role" == PM || "$role" == OS ]]; then
+                print_error "el ${role} no arrancó; no se envía el arranque ni se marca status.json." >&2
                 print_info "Para recuperar, en el pane ${pane_id}: agy --agent ${role}-${project_name}${repo_path:+ --add-dir $project_dir} -i \"Lee y segui las instrucciones de arranque del archivo ${trio_dir}/kickoff.md\"" >&2
             fi
         fi
     else
-        if [[ "$kickoff_pm" -eq 1 ]]; then kickoff_en_arranque=1; fi
+        if [[ "$kickoff_target" -eq 1 ]]; then kickoff_en_arranque=1; fi
     fi
 }
