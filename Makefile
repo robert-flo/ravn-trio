@@ -23,6 +23,7 @@ install:
 	install -m 755 pj-trio "$(DESTDIR)$(SHAREDIR)/pj-trio"
 	install -m 755 trio-status "$(DESTDIR)$(SHAREDIR)/trio-status"
 	install -m 644 trio-pm-prompt.md "$(DESTDIR)$(SHAREDIR)/trio-pm-prompt.md"
+	install -m 644 trio-os-prompt.md "$(DESTDIR)$(SHAREDIR)/trio-os-prompt.md"
 	install -m 644 trio.conf.example "$(DESTDIR)$(SHAREDIR)/trio.conf.example"
 	install -m 644 runtime/commands.tsv "$(DESTDIR)$(SHAREDIR)/runtime/commands.tsv"
 	install -m 644 runtime/helper/set_variable.sh "$(DESTDIR)$(SHAREDIR)/runtime/helper/set_variable.sh"

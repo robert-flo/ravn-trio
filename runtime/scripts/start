@@ -30,7 +30,7 @@ source "$PROJECT_DIR/lib/trio_agy.sh"
 
 mostrar_uso() {
     cat <<'EOF'
-Uso: pj-trio [start] [--dry-run] [--no-kickoff] [--print-kickoff] <proyecto> <ticket> [--repo <miembro>] [--base <rama>]
+Uso: pj-trio [start] [--dry-run] [--no-kickoff] [--print-kickoff] [--oneshot] <proyecto> <ticket> [--repo <miembro>] [--base <rama>]
 
 Argumentos:
   <proyecto>        Ruta o nombre del proyecto meta (pj-*).
@@ -39,6 +39,8 @@ Argumentos:
   <ticket>          Identificador numérico o alfanumérico del ticket / issue.
 
 Opciones:
+  --oneshot         Modo oneshot: crea un workspace con 1 sola pestaña (os)
+                    para el agente OS-<proyecto> y ejecuta trio-os-prompt.md.
   --repo <miembro>  Repositorio miembro del proyecto (hermano, subdirectorio o ruta).
                     Los agentes abren ahí; el meta-repo va por --add-dir.
   --base <rama>     Rama del spec (sub-issue, ADR 0006 de pj-template): el worktree
@@ -55,6 +57,7 @@ EOF
 dry_run=0
 kickoff=1
 print_kickoff=0
+modo_oneshot=0
 repo_arg=""
 base_rama=""
 positional=()
@@ -71,6 +74,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --print-kickoff)
             print_kickoff=1
+            shift
+            ;;
+        --oneshot)
+            modo_oneshot=1
             shift
             ;;
         --repo)
@@ -166,40 +173,64 @@ if [[ "$dry_run" -eq 1 ]]; then
     fi
     echo "[dry-run] Workspace label: $ws_label"
     echo "[dry-run] Configuración (capas, la última gana): $config_file"
-    echo "[dry-run] Kinds: PM='${PM_KIND}' WK='${WK_KIND}' RV='${RV_KIND}'"
+    if [[ "$modo_oneshot" -eq 1 ]]; then
+        echo "[dry-run] Kinds: OS='${OS_KIND}'"
+    else
+        echo "[dry-run] Kinds: PM='${PM_KIND}' WK='${WK_KIND}' RV='${RV_KIND}'"
+    fi
     echo ""
     instalar_integraciones
-    echo "[dry-run] herdr workspace create --cwd \"$work_dir\" --label \"$ws_label\" --no-focus"
-    echo "[dry-run] herdr tab rename \"<id_tab_pm>\" pm"
-    echo "[dry-run] herdr pane rename \"<id_pane_pm>\" \"PM-${ticket}\""
-    echo "[dry-run] herdr tab create --workspace \"<id_ws>\" --cwd \"$work_dir\" --label wk --no-focus"
-    echo "[dry-run] herdr pane rename \"<id_pane_wk>\" \"WK-${ticket}\""
-    echo "[dry-run] herdr tab create --workspace \"<id_ws>\" --cwd \"$work_dir\" --label rv --no-focus"
-    echo "[dry-run] herdr pane rename \"<id_pane_rv>\" \"RV-${ticket}\""
+    if [[ "$modo_oneshot" -eq 1 ]]; then
+        echo "[dry-run] herdr workspace create --cwd \"$work_dir\" --label \"$ws_label\" --no-focus"
+        echo "[dry-run] herdr tab rename \"<id_tab_os>\" os"
+        echo "[dry-run] herdr pane rename \"<id_pane_os>\" \"OS-${ticket}\""
 
-    for role in PM WK RV; do
-        role_lower=$(echo "$role" | tr '[:upper:]' '[:lower:]')
-        k=""
-        an=""
-        case "$role" in
-            PM) k="$PM_KIND"; an="$agent_pm" ;;
-            WK) k="$WK_KIND"; an="$agent_wk" ;;
-            RV) k="$RV_KIND"; an="$agent_rv" ;;
-        esac
-        if [[ -n "$k" ]]; then
-            extra_args="-- --agent \"${role}-${project_name}\""
+        if [[ -n "$OS_KIND" ]]; then
+            extra_args="-- --agent \"OS-${project_name}\""
             if [[ -n "$repo_path" ]]; then
                 extra_args="$extra_args --add-dir \"$project_dir\""
             fi
-            if [[ "$role" == PM && "$k" == agy && "$kickoff" -eq 1 ]]; then
+            if [[ "$OS_KIND" == agy && "$kickoff" -eq 1 ]]; then
                 extra_args="$extra_args -i \"Lee y segui al pie de la letra las instrucciones de arranque del archivo ${trio_dir}/kickoff.md\""
                 kickoff_en_arranque=1
             fi
-            echo "[dry-run] herdr agent start \"$an\" --kind \"$k\" --pane \"<id_pane_${role_lower}>\" $extra_args"
+            echo "[dry-run] herdr agent start \"$agent_os\" --kind \"$OS_KIND\" --pane \"<id_pane_os>\" $extra_args"
         else
-            echo "[dry-run] # ${role}_KIND vacío: se deja el shell en tab ${role_lower}"
+            echo "[dry-run] # OS_KIND vacío: se deja el shell en tab os"
         fi
-    done
+    else
+        echo "[dry-run] herdr workspace create --cwd \"$work_dir\" --label \"$ws_label\" --no-focus"
+        echo "[dry-run] herdr tab rename \"<id_tab_pm>\" pm"
+        echo "[dry-run] herdr pane rename \"<id_pane_pm>\" \"PM-${ticket}\""
+        echo "[dry-run] herdr tab create --workspace \"<id_ws>\" --cwd \"$work_dir\" --label wk --no-focus"
+        echo "[dry-run] herdr pane rename \"<id_pane_wk>\" \"WK-${ticket}\""
+        echo "[dry-run] herdr tab create --workspace \"<id_ws>\" --cwd \"$work_dir\" --label rv --no-focus"
+        echo "[dry-run] herdr pane rename \"<id_pane_rv>\" \"RV-${ticket}\""
+
+        for role in PM WK RV; do
+            role_lower=$(echo "$role" | tr '[:upper:]' '[:lower:]')
+            k=""
+            an=""
+            case "$role" in
+                PM) k="$PM_KIND"; an="$agent_pm" ;;
+                WK) k="$WK_KIND"; an="$agent_wk" ;;
+                RV) k="$RV_KIND"; an="$agent_rv" ;;
+            esac
+            if [[ -n "$k" ]]; then
+                extra_args="-- --agent \"${role}-${project_name}\""
+                if [[ -n "$repo_path" ]]; then
+                    extra_args="$extra_args --add-dir \"$project_dir\""
+                fi
+                if [[ "$role" == PM && "$k" == agy && "$kickoff" -eq 1 ]]; then
+                    extra_args="$extra_args -i \"Lee y segui al pie de la letra las instrucciones de arranque del archivo ${trio_dir}/kickoff.md\""
+                    kickoff_en_arranque=1
+                fi
+                echo "[dry-run] herdr agent start \"$an\" --kind \"$k\" --pane \"<id_pane_${role_lower}>\" $extra_args"
+            else
+                echo "[dry-run] # ${role}_KIND vacío: se deja el shell en tab ${role_lower}"
+            fi
+        done
+    fi
 
     fijar_identidad_git
     enviar_kickoff
@@ -207,9 +238,13 @@ if [[ "$dry_run" -eq 1 ]]; then
     echo ""
     echo "Workspace ID: <simulado> ($ws_label)"
     echo "Tabs y roles:"
-    echo "  - pm: PM-${ticket} ($agent_pm) en <id_pane_pm>"
-    echo "  - wk: WK-${ticket} ($agent_wk) en <id_pane_wk>"
-    echo "  - rv: RV-${ticket} ($agent_rv) en <id_pane_rv>"
+    if [[ "$modo_oneshot" -eq 1 ]]; then
+        echo "  - os: OS-${ticket} ($agent_os) en <id_pane_os>"
+    else
+        echo "  - pm: PM-${ticket} ($agent_pm) en <id_pane_pm>"
+        echo "  - wk: WK-${ticket} ($agent_wk) en <id_pane_wk>"
+        echo "  - rv: RV-${ticket} ($agent_rv) en <id_pane_rv>"
+    fi
     echo "Comando para adjuntarte:"
     echo "  herdr workspace focus <simulado> && herdr"
     exit 0
@@ -236,6 +271,71 @@ fijar_identidad_git
 existing_ws_id="$(echo "$ws_list_json" | jq -r --arg label "$ws_label" '.result.workspaces[]? | select(.label == $label) | .workspace_id' | head -n 1)"
 
 ws_id=""
+
+if [[ "$modo_oneshot" -eq 1 ]]; then
+    os_tab=""
+    os_pane=""
+
+    if [[ -n "$existing_ws_id" ]]; then
+        ws_id="$existing_ws_id"
+        tabs_json="$(herdr tab list --workspace "$ws_id")"
+        panes_json="$(herdr pane list --workspace "$ws_id")"
+
+        os_tab="$(echo "$tabs_json" | jq -r '.result.tabs[]? | select(.label == "os") | .tab_id' | head -n 1)"
+        if [[ -z "$os_tab" ]]; then
+            first_tab="$(echo "$tabs_json" | jq -r '.result.tabs[0]?.tab_id // empty')"
+            if [[ -n "$first_tab" ]]; then
+                os_tab="$first_tab"
+                herdr tab rename "$os_tab" os >/dev/null
+            else
+                os_create="$(herdr tab create --workspace "$ws_id" --cwd "$work_dir" --label os --no-focus)"
+                os_tab="$(echo "$os_create" | jq -r '.result.tab.tab_id')"
+                os_pane="$(echo "$os_create" | jq -r '.result.root_pane.pane_id')"
+            fi
+        fi
+        if [[ -z "$os_pane" ]]; then
+            os_pane="$(echo "$panes_json" | jq -r --arg t "$os_tab" '.result.panes[]? | select(.tab_id == $t) | .pane_id' | head -n 1)"
+        fi
+        if [[ -n "$os_pane" ]]; then
+            herdr pane rename "$os_pane" "OS-${ticket}" >/dev/null
+        fi
+    else
+        create_json="$(herdr workspace create --cwd "$work_dir" --label "$ws_label" --no-focus)"
+        if echo "$create_json" | jq -e '.error' >/dev/null 2>&1; then
+            err_msg="$(echo "$create_json" | jq -r '.error.message // .error.code')"
+            print_error "Error al crear el workspace en herdr: $err_msg" >&2
+            exit 1
+        fi
+
+        ws_id="$(echo "$create_json" | jq -r '.result.workspace.workspace_id')"
+        os_tab="$(echo "$create_json" | jq -r '.result.tab.tab_id')"
+        os_pane="$(echo "$create_json" | jq -r '.result.root_pane.pane_id')"
+        herdr tab rename "$os_tab" os >/dev/null
+        herdr pane rename "$os_pane" "OS-${ticket}" >/dev/null
+    fi
+
+    if [[ -z "$os_pane" ]]; then
+        fresh_panes="$(herdr pane list --workspace "$ws_id")"
+        if [[ -z "$os_pane" && -n "$os_tab" ]]; then
+            os_pane="$(echo "$fresh_panes" | jq -r --arg t "$os_tab" '.result.panes[]? | select(.tab_id == $t) | .pane_id' | head -n 1)"
+            [[ -n "$os_pane" ]] && herdr pane rename "$os_pane" "OS-${ticket}" >/dev/null
+        fi
+    fi
+
+    pm_duplicado=0
+    iniciar_agente_rol "OS" "$os_pane" "$OS_KIND"
+    enviar_kickoff
+
+    cat <<EOF
+Workspace ID: $ws_id ($ws_label)
+Tabs y roles:
+  - os: OS-${ticket} ($agent_os) en $os_pane
+Comando para adjuntarte:
+  herdr workspace focus $ws_id && herdr
+EOF
+    exit 0
+fi
+
 pm_tab=""
 pm_pane=""
 wk_tab=""
