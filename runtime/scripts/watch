@@ -1,0 +1,324 @@
+#!/usr/bin/env bash
+
+# Watch command module: observa cambios en <proyecto>/.trio/*/status.json y salud de sub-PMs.
+# shellcheck disable=SC2034,SC2154 # Globals are shared with runtime/lib/trio_project.sh.
+set -Eeuo pipefail
+
+module_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091 # Resolved from the project root.
+source "$module_dir/../helper/set_variable.sh"
+PROJECT_DIR="$TRIO_RUNTIME_DIR"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/presentation.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/trio_project.sh"
+
+show_watch_help() {
+  print_section "Watch Usage"
+  cat <<'HELP_EOF'
+  Uso: pj-trio watch <proyecto> [--snapshot <archivo>] [--timeout <seg>] [--json]
+
+  Argumentos:
+    <proyecto>            Ruta o nombre del proyecto meta (pj-* / HR-*).
+
+  Opciones:
+    --snapshot <archivo>  Archivo JSON de snapshot previo/actual para detectar cambios inmediatos.
+    --timeout <seg>       Tiempo máximo de espera en segundos (default: 1800). Sale con 124 si vence.
+    --json                Imprime el resultado como JSON.
+    -h, --help            Muestra esta ayuda.
+HELP_EOF
+}
+
+snapshot_file=""
+timeout_sec=1800
+json_out=0
+positional=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --snapshot)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        print_error "--snapshot requiere un archivo." >&2
+        exit 1
+      fi
+      snapshot_file="$2"
+      shift 2
+      ;;
+    --timeout)
+      if [[ $# -lt 2 || ! "${2:-}" =~ ^[0-9]+$ || "${2:-0}" -le 0 ]]; then
+        print_error "--timeout requiere un entero positivo en segundos." >&2
+        exit 1
+      fi
+      timeout_sec="$2"
+      shift 2
+      ;;
+    --json)
+      json_out=1
+      shift
+      ;;
+    -h|--help)
+      show_watch_help
+      exit 0
+      ;;
+    --)
+      shift
+      positional+=("$@")
+      break
+      ;;
+    -*)
+      print_error "opción desconocida: $1" >&2
+      exit 1
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ ${#positional[@]} -ne 1 ]]; then
+  print_error "se requiere <proyecto>." >&2
+  show_watch_help >&2
+  exit 1
+fi
+
+proyecto_arg="${positional[0]}"
+repo_arg=""
+ticket=""
+export PJ_TRIO_NO_CLONE="${PJ_TRIO_NO_CLONE:-1}"
+trio_resolver_proyecto
+
+collect_snapshot() {
+  local -a status_files=()
+  local status_file clave raw_status estado paso pr head_sha merge_danger ts ticket_val
+  local repo_name pm_agent pm_herdr_status agent_json
+  local snapshot="{}" item
+
+  shopt -s nullglob
+  status_files=("$project_dir/.trio"/*/status.json)
+  shopt -u nullglob
+
+  for status_file in "${status_files[@]}"; do
+    clave="$(basename "$(dirname "$status_file")")"
+    if ! raw_status="$(jq -e '.' "$status_file" 2>/dev/null)"; then
+      print_warn "status.json inválido en ${clave}; se omite." >&2
+      continue
+    fi
+
+    estado="$(jq -r '.estado // ""' <<<"$raw_status")"
+    paso="$(jq -r '.paso // ""' <<<"$raw_status")"
+    pr="$(jq -r '.pr // ""' <<<"$raw_status")"
+    head_sha="$(jq -r '.head // ""' <<<"$raw_status")"
+    merge_danger="$(jq -r '.merge_danger // ""' <<<"$raw_status")"
+    ts="$(jq -r '.timestamp // ""' <<<"$raw_status")"
+    ticket_val="$(jq -r --arg c "$clave" '.ticket // $c' <<<"$raw_status")"
+
+    if [[ "$clave" =~ ^(.+)-([0-9]+)$ ]]; then
+      repo_name="${BASH_REMATCH[1]}"
+      ticket="${BASH_REMATCH[2]}"
+    else
+      repo_name=""
+      ticket="$clave"
+    fi
+    pm_agent="$(nombre_agente pm)"
+
+    pm_herdr_status=""
+    if [[ "$estado" == "en-curso" ]] && command -v herdr >/dev/null 2>&1; then
+      agent_json="$(herdr agent get "$pm_agent" 2>/dev/null || true)"
+      if [[ -n "$agent_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$agent_json"; then
+        pm_herdr_status="$(jq -r '.result.agent.agent_status // "unknown"' <<<"$agent_json")"
+      else
+        pm_herdr_status="unknown"
+      fi
+    fi
+
+    item="$(jq -n \
+      --arg clave "$clave" \
+      --arg ticket "$ticket_val" \
+      --arg estado "$estado" \
+      --arg paso "$paso" \
+      --arg pm_agent "$pm_agent" \
+      --arg pm_herdr_status "$pm_herdr_status" \
+      --arg pr "$pr" \
+      --arg head "$head_sha" \
+      --arg merge_danger "$merge_danger" \
+      --arg timestamp "$ts" \
+      '{
+        clave: $clave,
+        ticket: $ticket,
+        estado: $estado,
+        paso: $paso,
+        pm_agent: $pm_agent,
+        pm_herdr_status: $pm_herdr_status,
+        pr: $pr,
+        head: $head,
+        merge_danger: $merge_danger,
+        timestamp: $timestamp
+      }')"
+
+    snapshot="$(jq -n --argjson s "$snapshot" --arg k "$clave" --argjson v "$item" '$s + {($k): $v}')"
+  done
+
+  jq -S '.' <<<"$snapshot"
+}
+
+diff_snapshots() {
+  local prev_json="$1"
+  local curr_json="$2"
+  jq -n --argjson prev "$prev_json" --argjson curr "$curr_json" '
+    [
+      ($curr | keys_unsorted[]) as $k
+      | ($prev[$k] // null) as $p
+      | $curr[$k] as $c
+      | select(
+          ($p == null)
+          or ($c.estado != $p.estado)
+          or ($c.paso != $p.paso)
+          or (($c.pm_herdr_status != $p.pm_herdr_status) and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
+        )
+      | {
+          clave: $c.clave,
+          ticket: $c.ticket,
+          tipo: (
+            if $p == null then "nuevo"
+            elif $c.estado != $p.estado then "estado"
+            elif $c.paso != $p.paso then "paso"
+            else "pm_herdr_status"
+            end
+          ),
+          estado: $c.estado,
+          paso: $c.paso,
+          pm_agent: $c.pm_agent,
+          pm_herdr_status: $c.pm_herdr_status,
+          prev_estado: ($p.estado // ""),
+          prev_paso: ($p.paso // ""),
+          prev_pm_herdr_status: ($p.pm_herdr_status // ""),
+          pr: $c.pr,
+          head: $c.head,
+          merge_danger: $c.merge_danger
+        }
+    ]
+  '
+}
+
+write_snapshot() {
+  local snap="$1"
+  [[ -n "$snapshot_file" ]] || return 0
+  mkdir -p "$(dirname "$snapshot_file")"
+  printf '%s\n' "$snap" > "$snapshot_file"
+}
+
+enrich_and_emit() {
+  local events_json="$1"
+  local enriched="[]"
+  local count i ev estado pm_status pm_agent tail_out
+
+  count="$(jq 'length' <<<"$events_json")"
+  for (( i = 0; i < count; i++ )); do
+    ev="$(jq -c ".[$i]" <<<"$events_json")"
+    estado="$(jq -r '.estado // ""' <<<"$ev")"
+    pm_status="$(jq -r '.pm_herdr_status // ""' <<<"$ev")"
+    pm_agent="$(jq -r '.pm_agent // ""' <<<"$ev")"
+    tail_out=""
+
+    if [[ "$estado" == "needs-roberto" || "$pm_status" == "blocked" || "$pm_status" == "unknown" ]]; then
+      if [[ -n "$pm_agent" ]] && command -v herdr >/dev/null 2>&1; then
+        tail_out="$(herdr agent read "$pm_agent" 2>/dev/null | tail -n 25 || true)"
+      fi
+    fi
+
+    ev="$(jq -n --argjson ev "$ev" --arg tail "$tail_out" '$ev + {tail: $tail}')"
+    enriched="$(jq -n --argjson arr "$enriched" --argjson ev "$ev" '$arr + [$ev]')"
+  done
+
+  if [[ "$json_out" -eq 1 ]]; then
+    jq -n --argjson events "$enriched" '{status: "changed", events: $events}'
+    return 0
+  fi
+
+  print_section "Watch — ${project_name}"
+  for (( i = 0; i < count; i++ )); do
+    ev="$(jq -c ".[$i]" <<<"$enriched")"
+    local clave tipo paso prev_estado prev_paso prev_pm
+    clave="$(jq -r '.clave' <<<"$ev")"
+    tipo="$(jq -r '.tipo' <<<"$ev")"
+    estado="$(jq -r '.estado' <<<"$ev")"
+    paso="$(jq -r '.paso' <<<"$ev")"
+    pm_status="$(jq -r '.pm_herdr_status' <<<"$ev")"
+    pm_agent="$(jq -r '.pm_agent' <<<"$ev")"
+    prev_estado="$(jq -r '.prev_estado' <<<"$ev")"
+    prev_paso="$(jq -r '.prev_paso' <<<"$ev")"
+    prev_pm="$(jq -r '.prev_pm_herdr_status' <<<"$ev")"
+    tail_out="$(jq -r '.tail' <<<"$ev")"
+
+    printf '  %s [%s]: estado=%s paso=%s pm=%s\n' \
+      "$clave" "$tipo" "${estado:--}" "${paso:--}" "${pm_status:--}"
+    if [[ "$tipo" == "estado" ]]; then
+      printf '    estado: %s -> %s\n' "${prev_estado:--}" "${estado:--}"
+    elif [[ "$tipo" == "paso" ]]; then
+      printf '    paso: %s -> %s\n' "${prev_paso:--}" "${paso:--}"
+    elif [[ "$tipo" == "pm_herdr_status" ]]; then
+      printf '    pm: %s -> %s\n' "${prev_pm:--}" "${pm_status:--}"
+    fi
+    if [[ -n "$tail_out" ]]; then
+      printf '    --- últimas líneas de %s ---\n' "$pm_agent"
+      while IFS= read -r line; do
+        printf '    %s\n' "$line"
+      done <<<"$tail_out"
+    fi
+  done
+}
+
+curr_snapshot="$(collect_snapshot)"
+
+if [[ -n "$snapshot_file" && -f "$snapshot_file" ]]; then
+  if prev_snapshot="$(jq -e '.' "$snapshot_file" 2>/dev/null)"; then
+    events="$(diff_snapshots "$prev_snapshot" "$curr_snapshot")"
+    if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
+      write_snapshot "$curr_snapshot"
+      enrich_and_emit "$events"
+      exit 0
+    fi
+  else
+    print_warn "snapshot previo inválido en ${snapshot_file}; se reinicia." >&2
+  fi
+fi
+
+write_snapshot "$curr_snapshot"
+baseline="$curr_snapshot"
+
+interval="${PJ_TRIO_WATCH_INTERVAL:-30}"
+if [[ ! "$interval" =~ ^[0-9]+$ || "$interval" -le 0 ]]; then
+  interval=30
+fi
+
+start_ts="$(date +%s)"
+while true; do
+  now="$(date +%s)"
+  elapsed=$(( now - start_ts ))
+  remaining=$(( timeout_sec - elapsed ))
+  if [[ "$remaining" -le 0 ]]; then
+    if [[ "$json_out" -eq 1 ]]; then
+      jq -n --argjson t "$timeout_sec" '{status: "timeout", timeout: $t, events: []}'
+    else
+      print_warn "Timeout (${timeout_sec}s) sin cambios en ${project_name}." >&2
+    fi
+    exit 124
+  fi
+
+  cycle=$(( remaining < interval ? remaining : interval ))
+  if [[ -d "$project_dir/.trio" ]] && command -v inotifywait >/dev/null 2>&1; then
+    inotifywait -e modify,create,moved_to -r -q -t "$cycle" "$project_dir/.trio" >/dev/null 2>&1 || true
+  else
+    sleep "$cycle"
+  fi
+
+  curr_snapshot="$(collect_snapshot)"
+  events="$(diff_snapshots "$baseline" "$curr_snapshot")"
+  if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
+    write_snapshot "$curr_snapshot"
+    enrich_and_emit "$events"
+    exit 0
+  fi
+  baseline="$curr_snapshot"
+done
