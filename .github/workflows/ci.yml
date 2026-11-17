@@ -53,4 +53,5 @@ jobs:
           test -f dest/usr/share/ravn/trio/runtime/lib/presentation.sh
           test -x dest/usr/share/ravn/trio/trio-status
           test -f dest/usr/share/ravn/trio/trio-pm-prompt.md
+          test -f dest/usr/share/ravn/trio/trio-os-prompt.md
           test -f dest/usr/share/ravn/trio/trio.conf.example
