@@ -10,6 +10,7 @@
 PM_KIND="agy"
 WK_KIND="agy"
 RV_KIND="agy"
+OS_KIND="agy"
 
 # Identidad git que pj-trio fija con `git config` local en el meta-repo y en el
 # miembro (los worktrees la heredan). El PM no la toca a mano.

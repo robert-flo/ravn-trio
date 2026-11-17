@@ -134,7 +134,14 @@ collect_snapshot() {
       if [[ -n "$agent_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$agent_json"; then
         pm_herdr_status="$(jq -r '.result.agent.agent_status // "unknown"' <<<"$agent_json")"
       else
-        pm_herdr_status="unknown"
+        os_agent="$(nombre_agente os)"
+        os_json="$(herdr agent get "$os_agent" 2>/dev/null || true)"
+        if [[ -n "$os_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$os_json"; then
+          pm_agent="$os_agent"
+          pm_herdr_status="$(jq -r '.result.agent.agent_status // "unknown"' <<<"$os_json")"
+        else
+          pm_herdr_status="unknown"
+        fi
       fi
     fi
 

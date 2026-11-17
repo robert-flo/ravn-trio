@@ -7,6 +7,7 @@ trio_cargar_config() {
     PM_KIND=""
     WK_KIND=""
     RV_KIND=""
+    OS_KIND=""
     TRIO_GIT_NAME=""
     TRIO_GIT_EMAIL=""
 
@@ -35,6 +36,7 @@ trio_cargar_config() {
             source "$f"
         fi
     done
+    [[ -n "$OS_KIND" ]] || OS_KIND="${PM_KIND:-agy}"
     config_file=""
     if ((${#trio_config_capas[@]})); then
         config_file="${trio_config_capas[*]}"
@@ -43,6 +45,17 @@ trio_cargar_config() {
 
 trio_localizar_recursos() {
     prompt_template="${PJ_TRIO_PM_PROMPT:-}"
+    if [[ "${modo_oneshot:-0}" -eq 1 ]]; then
+        prompt_template="${PJ_TRIO_OS_PROMPT:-}"
+        if [[ -z "$prompt_template" ]]; then
+            for c in "${TRIO_SHARE_DIR}/trio-os-prompt.md" "${TRIO_ROOT}/trio-os-prompt.md"; do
+                if [[ -f "$c" ]]; then
+                    prompt_template="$c"
+                    break
+                fi
+            done
+        fi
+    fi
     if [[ -z "$prompt_template" ]]; then
         for c in ${TRIO_SHARE_DIR}/trio-pm-prompt.md "${TRIO_ROOT}/trio-pm-prompt.md"; do
             if [[ -f "$c" ]]; then
@@ -65,7 +78,11 @@ trio_localizar_recursos() {
 
 renderizar_kickoff() {
     if [[ -z "$prompt_template" || ! -f "$prompt_template" ]]; then
-        print_error "no se encontró trio-pm-prompt.md (definí PJ_TRIO_PM_PROMPT)." >&2
+        if [[ "${modo_oneshot:-0}" -eq 1 ]]; then
+            print_error "no se encontró trio-os-prompt.md (definí PJ_TRIO_OS_PROMPT)." >&2
+        else
+            print_error "no se encontró trio-pm-prompt.md (definí PJ_TRIO_PM_PROMPT)." >&2
+        fi
         return 1
     fi
     # Base del worktree y del PR: la rama del spec (--base) o la rama por defecto.
@@ -99,6 +116,7 @@ renderizar_kickoff() {
     t="${t//\{\{AGENTE_PM\}\}/$agent_pm}"
     t="${t//\{\{AGENTE_WK\}\}/$agent_wk}"
     t="${t//\{\{AGENTE_RV\}\}/$agent_rv}"
+    t="${t//\{\{AGENTE_OS\}\}/${agent_os:-}}"
     t="${t//\{\{TRIO_STATUS\}\}/$trio_status}"
     t="${t//\{\{WORKSPACE_NOMBRE\}\}/${ws_label:-}}"
     printf '%s\n' "$t"

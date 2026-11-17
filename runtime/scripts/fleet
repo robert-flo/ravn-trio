@@ -133,7 +133,16 @@ for status_file in "${status_files[@]}"; do
         workspace_id="$(jq -r '.result.agent.workspace_id // ""' <<<"$agent_json")"
       fi
     else
-      pm_herdr_status="cerrado"
+      os_agent="$(nombre_agente os)"
+      os_json="$(herdr agent get "$os_agent" 2>/dev/null || true)"
+      if [[ -n "$os_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$os_json"; then
+        pm_herdr_status="$(jq -r '.result.agent.agent_status // "cerrado"' <<<"$os_json")"
+        if [[ -z "$workspace_id" ]]; then
+          workspace_id="$(jq -r '.result.agent.workspace_id // ""' <<<"$os_json")"
+        fi
+      else
+        pm_herdr_status="cerrado"
+      fi
     fi
   fi
 
