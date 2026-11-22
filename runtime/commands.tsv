@@ -1,6 +1,6 @@
 # canonical	aliases	label	description	icon	menu	options
-start	s --start -s	Start trio	Create or reuse the herdr workspace with PM, WK and RV for a ticket.		1	-h --help --dry-run --no-kickoff --print-kickoff --repo --base --oneshot
-kickoff	k --kickoff -k	Print PM kickoff	Render the PM kickoff prompt for a ticket (same as start --print-kickoff).		1	-h --help --repo --base --oneshot
+start	s --start -s	Start trio	Create or reuse the herdr workspace with PM, WK and RV for a ticket.		1	-h --help --dry-run --no-kickoff --print-kickoff --repo --base --oneshot --kind
+kickoff	k --kickoff -k	Print PM kickoff	Render the PM kickoff prompt for a ticket (same as start --print-kickoff).		1	-h --help --repo --base --oneshot --kind
 status	st --status	Write status.json	Write .trio/<ticket>/status.json and optionally notify-send.		1	-h --help
 fleet	fl --fleet	Fleet status	Show consolidated status of all trios in a project.		1	-h --help --activos --json
 watch	w --watch	Watch trios	Observe .trio/*/status.json and sub-PM health until a change or timeout.		1	-h --help --ticket --snapshot --timeout --verbose --json

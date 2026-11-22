@@ -76,6 +76,12 @@ trio_localizar_recursos() {
     fi
 }
 
+trio_cursor_rule_ref() {
+    local rule="$1" slug
+    slug="$(sanear_nombre "$project_name")"
+    printf '@%s/.cursor/rules/%s-%s.mdc\n' "$project_dir" "$rule" "$slug"
+}
+
 renderizar_kickoff() {
     if [[ -z "$prompt_template" || ! -f "$prompt_template" ]]; then
         if [[ "${modo_oneshot:-0}" -eq 1 ]]; then
@@ -98,6 +104,13 @@ renderizar_kickoff() {
         wk_merge=" Es un sub-issue: con CI verde y code-review limpio, mergeá vos tu PR a ${base_rama} con gh pr merge <pr> -R ${ticket_repo:-} --squash --delete-branch --match-head-commit <sha-verde> y anotá el sha del merge en wk.md."
         nota_subissue="Este ticket es un sub-issue (base ${base_rama}): no hay paso RV ni merge tuyo. El WK mergea su PR a la rama del spec (ADR 0018 de pj-template). Confirmá en GitHub que quedó mergeado (\`gh pr view <pr> -R ${ticket_repo:-} --json state,mergeCommit\`) y saltá al paso 7. El PR final de la rama del spec lo revisa RV y lo mergeás vos."
     fi
+    local wk_rule_prefix="" rv_rule_prefix=""
+    if [[ "${WK_KIND:-}" == cursor ]]; then
+        wk_rule_prefix="$(trio_cursor_rule_ref wk) "
+    fi
+    if [[ "${RV_KIND:-}" == cursor ]]; then
+        rv_rule_prefix="$(trio_cursor_rule_ref rv) "
+    fi
     local t
     t="$(cat "$prompt_template")"
     t="${t//\{\{PROYECTO\}\}/$project_name}"
@@ -111,6 +124,8 @@ renderizar_kickoff() {
     t="${t//\{\{GH_PR_BASE\}\}/"$gh_pr_base"}"
     t="${t//\{\{WK_MERGE\}\}/"$wk_merge"}"
     t="${t//\{\{NOTA_SUBISSUE\}\}/"$nota_subissue"}"
+    t="${t//\{\{WK_RULE_PREFIX\}\}/$wk_rule_prefix}"
+    t="${t//\{\{RV_RULE_PREFIX\}\}/$rv_rule_prefix}"
     t="${t//\{\{WT_RAIZ\}\}/"${wt_raiz:-}"}"
     t="${t//\{\{MIEMBRO_SLUG\}\}/"${miembro_slug:-}"}"
     t="${t//\{\{AGENTE_PM\}\}/$agent_pm}"
