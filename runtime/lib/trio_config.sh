@@ -101,8 +101,13 @@ renderizar_kickoff() {
         base_ref="origin/${base_rama}"
         base_pr="${base_rama}"
         gh_pr_base=" --base '${base_rama}'"
-        wk_merge=" Es un sub-issue: con CI verde y code-review limpio, mergeá vos tu PR a ${base_rama} con gh pr merge <pr> -R ${ticket_repo:-} --squash --delete-branch --match-head-commit <sha-verde> y anotá el sha del merge en wk.md."
-        nota_subissue="Este ticket es un sub-issue (base ${base_rama}): no hay paso RV ni merge tuyo. El WK mergea su PR a la rama del spec (ADR 0018 de pj-template). Confirmá en GitHub que quedó mergeado (\`gh pr view <pr> -R ${ticket_repo:-} --json state,mergeCommit\`) y saltá al paso 7. El PR final de la rama del spec lo revisa RV y lo mergeás vos."
+        wk_merge=" Es un sub-issue: con CI verde y code-review limpio, mergeá vos tu PR a ${base_rama} con gh pr merge <pr> -R ${pr_repo:-} --squash --delete-branch --match-head-commit <sha-verde> y anotá el sha del merge en wk.md."
+        nota_subissue="Este ticket es un sub-issue (base ${base_rama}): no hay paso RV ni merge tuyo. El WK mergea su PR a la rama del spec (ADR 0018 de pj-template). Confirmá en GitHub que quedó mergeado (\`gh pr view <pr> -R ${pr_repo:-} --json state,mergeCommit\`) y saltá al paso 7. El PR final de la rama del spec lo revisa RV y lo mergeás vos."
+    fi
+    local wk_issue_ref="" os_issue_ref="Closes #${ticket}"
+    if [[ "${issue_repo:-}" != "${pr_repo:-}" ]]; then
+        wk_issue_ref=", referenciando ${issue_repo}#${ticket} en el body (no Closes #${ticket})"
+        os_issue_ref="${issue_repo}#${ticket} (en vez de Closes #${ticket})"
     fi
     local wk_rule_prefix="" rv_rule_prefix=""
     if [[ "${WK_KIND:-}" == cursor ]]; then
@@ -116,7 +121,11 @@ renderizar_kickoff() {
     t="${t//\{\{PROYECTO\}\}/$project_name}"
     t="${t//\{\{PROYECTO_DIR\}\}/$project_dir}"
     t="${t//\{\{TICKET\}\}/$ticket}"
-    t="${t//\{\{TICKET_REPO\}\}/${ticket_repo:-}}"
+    t="${t//\{\{ISSUE_REPO\}\}/${issue_repo:-}}"
+    t="${t//\{\{PR_REPO\}\}/${pr_repo:-}}"
+    t="${t//\{\{TICKET_REPO\}\}/${issue_repo:-}}"
+    t="${t//\{\{WK_ISSUE_REF\}\}/"$wk_issue_ref"}"
+    t="${t//\{\{OS_ISSUE_REF\}\}/"$os_issue_ref"}"
     t="${t//\{\{MIEMBRO_DIR\}\}/$miembro_dir}"
     t="${t//\{\{TRIO_DIR\}\}/$trio_dir}"
     t="${t//\{\{BASE_REF\}\}/"$base_ref"}"

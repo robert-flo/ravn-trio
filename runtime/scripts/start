@@ -30,7 +30,7 @@ source "$PROJECT_DIR/lib/trio_agy.sh"
 
 mostrar_uso() {
     cat <<'EOF'
-Uso: pj-trio [start] [--dry-run] [--no-kickoff] [--print-kickoff] [--oneshot] [--kind <agy|cursor>] <proyecto> <ticket> [--repo <miembro>] [--base <rama>]
+Uso: pj-trio [start] [--dry-run] [--no-kickoff] [--print-kickoff] [--oneshot] [--kind <agy|cursor>] <proyecto> <ticket> [--repo <miembro>] [--ticket-repo <owner/repo>] [--base <rama>]
 
 Argumentos:
   <proyecto>        Ruta o nombre del proyecto meta (pj-*).
@@ -44,6 +44,9 @@ Opciones:
   --kind <kind>     Plataforma de los agentes: agy (default) o cursor.
   --repo <miembro>  Repositorio miembro del proyecto (hermano, subdirectorio o ruta).
                     Los agentes abren ahí; el meta-repo va por --add-dir.
+  --ticket-repo <owner/repo>
+                    Repositorio de GitHub donde vive el issue (si difiere del repo
+                    de código/PR). Formato estricto: owner/repo.
   --base <rama>     Rama del spec (sub-issue, ADR 0006 de pj-template): el worktree
                     sale de origin/<rama> y el PR va contra <rama>. Sin --base
                     (trivial), sale de origin/HEAD y el PR va a la rama por defecto.
@@ -61,6 +64,8 @@ print_kickoff=0
 modo_oneshot=0
 kind_arg=""
 repo_arg=""
+ticket_repo_arg=""
+ticket_repo_set=0
 base_rama=""
 positional=()
 
@@ -104,6 +109,20 @@ while [[ $# -gt 0 ]]; do
             ;;
         --repo=*)
             repo_arg="${1#*=}"
+            shift
+            ;;
+        --ticket-repo)
+            if [[ $# -lt 2 ]]; then
+                print_error "--ticket-repo requiere un argumento (<owner/repo>)." >&2
+                exit 1
+            fi
+            ticket_repo_arg="$2"
+            ticket_repo_set=1
+            shift 2
+            ;;
+        --ticket-repo=*)
+            ticket_repo_arg="${1#*=}"
+            ticket_repo_set=1
             shift
             ;;
         --base)
@@ -159,6 +178,13 @@ if [[ -n "$kind_arg" && "$kind_arg" != "agy" && "$kind_arg" != "cursor" ]]; then
     exit 1
 fi
 
+if [[ "$ticket_repo_set" -eq 1 ]]; then
+    if [[ ! "$ticket_repo_arg" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+        print_error "--ticket-repo: '$ticket_repo_arg' debe tener formato <owner/repo>." >&2
+        exit 1
+    fi
+fi
+
 trio_resolver_proyecto
 trio_cargar_config
 if [[ -n "$kind_arg" ]]; then
@@ -196,6 +222,7 @@ if [[ "$dry_run" -eq 1 ]]; then
     if [[ -n "$repo_path" ]]; then
         echo "[dry-run] Repositorio miembro: $repo_path ($repo_name)"
     fi
+    echo "[dry-run] Issue repo: $issue_repo | PR repo: $pr_repo"
     echo "[dry-run] Workspace label: $ws_label"
     echo "[dry-run] Configuración (capas, la última gana): $config_file"
     if [[ "$modo_oneshot" -eq 1 ]]; then
