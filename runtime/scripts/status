@@ -14,18 +14,19 @@ show_status_help() {
   cat << 'HELP_EOF'
   Uso: trio-status [--dry-run] [--notify] [--cola-de <agente>] [--error <texto>]
                    [--pr <url>] [--head <sha>] [--merge-sha <sha>]
-                   [--merge-danger <texto>] <trio_dir> <estado> <paso>
+                   [--merge-danger <texto>] [--session <nombre>] <trio_dir> <estado> <paso>
 
   Esquema de status.json (las claves no indicadas se conservan del archivo previo):
     ticket        id del ticket (nombre de <trio_dir>)
     estado        en-curso | hecho | needs-roberto
     paso          plan | wk | rv | merge | cierre
-    error         motivo del fallo ("" si no hay)
+    error         motivo del fallo ("" si hay)
     intentos      intentos hechos en el paso actual (1 o 2)
     timestamp     ISO 8601 con zona
     pr, head      PR y sha en juego (opcionales)
     merge_sha     sha del commit de merge (opcional)
     merge_danger  evaluación Merge Danger del PR (opcional)
+    session       sesión persistente de herdr del spec (opcional)
     cola          últimas líneas del panel del agente que falló (opcional)
 HELP_EOF
 }
@@ -39,6 +40,7 @@ head=""
 merge_sha=""
 merge_danger=""
 intentos=""
+session=""
 pos=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -51,6 +53,7 @@ while [[ $# -gt 0 ]]; do
         --merge-sha) merge_sha="${2:?}"; shift 2 ;;
         --merge-danger) merge_danger="${2:?}"; shift 2 ;;
         --intentos) intentos="${2:?}"; shift 2 ;;
+        --session) session="${2:?}"; shift 2 ;;
         -h|--help) show_status_help; exit 0 ;;
         *) pos+=("$1"); shift ;;
     esac
@@ -60,22 +63,32 @@ trio_dir="${pos[0]}"; estado="${pos[1]}"; paso="${pos[2]}"
 case "$estado" in en-curso|hecho|needs-roberto) ;; *) print_error "estado inválido '$estado'." >&2; exit 1 ;; esac
 case "$paso" in plan|wk|rv|merge|cierre) ;; *) print_error "paso inválido '$paso'." >&2; exit 1 ;; esac
 
-cola=""
-if [[ -n "$cola_de" ]] && command -v herdr >/dev/null 2>&1; then
-    cola="$(herdr agent read "$cola_de" 2>&1 | tail -n 40 || true)"
-fi
-
 previo="{}"
 [[ -f "$trio_dir/status.json" ]] && previo="$(cat "$trio_dir/status.json")"
+effective_session="$session"
+if [[ -z "$effective_session" ]]; then
+    effective_session="$(jq -r '.session // empty' <<<"$previo" 2>/dev/null || true)"
+fi
+
+cola=""
+if [[ -n "$cola_de" ]] && command -v herdr >/dev/null 2>&1; then
+    if [[ -n "$effective_session" ]]; then
+        cola="$(herdr --session "$effective_session" agent read "$cola_de" 2>&1 | tail -n 40 || true)"
+    else
+        cola="$(herdr agent read "$cola_de" 2>&1 | tail -n 40 || true)"
+    fi
+fi
+
 json="$(jq -n --argjson p "$previo" --arg ticket "$(basename "$trio_dir")" --arg estado "$estado" \
     --arg paso "$paso" --arg error "$error" --arg ts "$(date --iso-8601=seconds)" \
     --arg pr "$pr" --arg head "$head" --arg merge_sha "$merge_sha" --arg merge_danger "$merge_danger" \
-    --arg cola "$cola" --arg intentos "$intentos" '
+    --arg session "$session" --arg cola "$cola" --arg intentos "$intentos" '
     $p + {ticket: $ticket, estado: $estado, paso: $paso, error: $error, timestamp: $ts}
     + (if $pr != "" then {pr: $pr} else {} end)
     + (if $head != "" then {head: $head} else {} end)
     + (if $merge_sha != "" then {merge_sha: $merge_sha} else {} end)
     + (if $merge_danger != "" then {merge_danger: $merge_danger} else {} end)
+    + (if $session != "" then {session: $session} else {} end)
     + (if $intentos != "" then {intentos: ($intentos|tonumber)} else {} end)
     + (if $cola != "" then {cola: $cola} else {} end)
     | del(.fase)')"
