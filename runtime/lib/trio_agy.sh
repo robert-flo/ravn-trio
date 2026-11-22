@@ -41,14 +41,16 @@ _trio_pausa_manual() {
 # Mira `herdr agent get` (status) y `herdr agent read` (pantalla).
 esperar_agente_listo() {
     local agente="$1" fallback_pane="${2:-}"
+    local -a herdr_cmd=(herdr)
+    [[ -n "${herdr_session:-}" ]] && herdr_cmd+=(--session "$herdr_session")
     local timeout="${TRIO_READY_TIMEOUT:-180}" intervalo="${TRIO_READY_INTERVAL:-2}"
     local inicio=$SECONDS avisado=0 pausa=1 estado pantalla target
     while (( SECONDS - inicio < timeout )); do
         target="$agente"
-        if [[ -n "$fallback_pane" ]] && ! herdr agent get "$target" >/dev/null 2>&1; then
+        if [[ -n "$fallback_pane" ]] && ! "${herdr_cmd[@]}" agent get "$target" >/dev/null 2>&1; then
             target="$fallback_pane"
         fi
-        pantalla="$(herdr agent read "$target" 2>/dev/null | tail -n 60 || true)"
+        pantalla="$("${herdr_cmd[@]}" agent read "$target" 2>/dev/null | tail -n 60 || true)"
         if grep -qiE 'trust (the contents of )?this (project|folder)|Yes, I trust this folder' <<<"$pantalla"; then
             if [[ "$avisado" -eq 0 ]]; then
                 trio_notificar "${agente}: agy pide confiar en la carpeta. Aceptá el diálogo en herdr y pulsá Enter para continuar."
@@ -60,7 +62,7 @@ esperar_agente_listo() {
             # Sin tty de dónde leer la tecla: como antes, sondeo hasta el timeout.
             pausa=0
         else
-            estado="$(herdr agent get "$target" 2>/dev/null | jq -r '.result.agent.agent_status // .result.agent.status // .result.status // empty' 2>/dev/null || true)"
+            estado="$("${herdr_cmd[@]}" agent get "$target" 2>/dev/null | jq -r '.result.agent.agent_status // .result.agent.status // .result.status // empty' 2>/dev/null || true)"
             [[ "$estado" == idle ]] && return 0
         fi
         sleep "$intervalo"
