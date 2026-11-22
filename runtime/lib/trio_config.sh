@@ -148,6 +148,16 @@ renderizar_kickoff() {
     t="${t//\{\{NOTA_SUBISSUE\}\}/"$nota_subissue"}"
     t="${t//\{\{WK_RULE_PREFIX\}\}/$wk_rule_prefix}"
     t="${t//\{\{RV_RULE_PREFIX\}\}/$rv_rule_prefix}"
+    local wt_prep=""
+    if [[ -n "${bare_dir:-}" && -d "${bare_dir}" ]]; then
+        wt_prep="git -C ${bare_dir} fetch origin"
+    else
+        wt_prep="BARE_HOME=${BARE_HOME:-/z/bare} WORKTREES_HOME=${WORKTREES_HOME:-/z/repos} ravn-git-bare-clone clone ${miembro_slug:-}"
+    fi
+    t="${t//\{\{BARE_HOME\}\}/"${BARE_HOME:-/z/bare}"}"
+    t="${t//\{\{WORKTREES_HOME\}\}/"${WORKTREES_HOME:-/z/repos}"}"
+    t="${t//\{\{BARE_DIR\}\}/"${bare_dir:-}"}"
+    t="${t//\{\{WT_PREP\}\}/"$wt_prep"}"
     t="${t//\{\{WT_RAIZ\}\}/"${wt_raiz:-}"}"
     t="${t//\{\{MIEMBRO_SLUG\}\}/"${miembro_slug:-}"}"
     t="${t//\{\{AGENTE_PM\}\}/$agent_pm}"

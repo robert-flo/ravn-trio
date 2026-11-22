@@ -19,8 +19,8 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
 1. Leé el ticket con `gh issue view {{TICKET}} -R {{ISSUE_REPO}} --comments`.
    Si el ticket NO es trivial (requiere diseño complejo, cambios de arquitectura o toca varios módulos), pará, explicá el motivo en {{TRIO_DIR}}/os.md, ejecutá `{{TRIO_STATUS}} --notify {{TRIO_DIR}} needs-roberto plan --error "no es trivial; requiere trío completo"` y dejá el workspace abierto.
 2. Worktree NUEVO para este ticket, siempre, con ravn-git-bare-clone (ADR 0019 de pj-template); nunca `git worktree add` a mano ni uno viejo aunque exista:
-   `ravn-git-bare-clone clone {{MIEMBRO_SLUG}} && git-create-worktree -r {{WT_RAIZ}} -B '{{BASE_REF}}' -b issue/{{TICKET}}-<slug> -p '' {{TICKET}}-<slug>`
-   Queda en {{WT_RAIZ}}/{{TICKET}}-<slug>, en la rama issue/{{TICKET}}-<slug>. El clon {{MIEMBRO_DIR}} es para leer: nadie trabaja en él.
+   `{{WT_PREP}} && git-create-worktree -r {{WT_RAIZ}} -B '{{BASE_REF}}' -b issue/{{TICKET}}-<slug> -p '' {{TICKET}}-<slug>`
+   Queda en {{WT_RAIZ}}/{{TICKET}}-<slug>, en la rama issue/{{TICKET}}-<slug> (el bare vive en {{BARE_HOME}}). El clon {{MIEMBRO_DIR}} es para leer: nadie trabaja en él.
    Base: {{BASE_REF}}; el PR va contra {{BASE_PR}}.
    Actualizá: `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso wk`.
 3. Implementá el cambio mínimo necesario con `implement` (y `tdd` si aplica).
