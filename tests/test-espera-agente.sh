@@ -14,8 +14,8 @@ cat >"$tmp/bin/herdr" <<'STUB'
 c="$STUB_DIR/count"; n=$(cat "$c" 2>/dev/null || echo 0)
 case "$1 $2" in
   "agent read") n=$((n+1)); echo "$n" >"$c"
-     if (( n <= ${STUB_TRUST_READS:-0} )); then printf 'Do you trust the contents of this project?\n> Yes, I trust this folder\n'; else echo '>'; fi ;;
-  "agent get") echo "{\"result\":{\"agent\":{\"status\":\"${STUB_STATUS:-idle}\"}}}" ;;
+     if (( n <= ${STUB_TRUST_READS:-0} )); then printf 'Do you trust the contents of this project?\n> Yes, I trust this folder\n'; else printf '%s\n' "${STUB_PROMPT:->}"; fi ;;
+  "agent get") echo "{\"result\":{\"agent\":{\"agent_status\":\"${STUB_STATUS:-idle}\",\"interactive_ready\":${STUB_INTERACTIVE_READY:-true}}}}" ;;
 esac
 STUB
 # shellcheck disable=SC2016
@@ -89,4 +89,18 @@ timeout 10 env STUB_TRUST_READS=999 TRIO_READY_TTY="$tmp/no-existe" TRIO_READY_T
 # Sin tty cae al sondeo: anuncia que no puede leer la tecla y no promete la pausa.
 grep -q "no pude leer" "$tmp/err4" || fallo "sin tty debería avisar que no puede leer la tecla"
 grep -q "esperando una tecla" "$tmp/err4" && fallo "sin tty no debería anunciar la pausa"
+# 5. idle con interactive_ready=false: no retorna 0, vence al timeout.
+rm -f "$tmp/count"
+rc5=0
+timeout 10 env STUB_STATUS=idle STUB_INTERACTIVE_READY=false TRIO_READY_TTY="$tmp/tty" TRIO_READY_TIMEOUT=1 \
+  bash -c 'esperar_agente_listo pm-x' 2>/dev/null || rc5=$?
+[[ "$rc5" -eq 1 ]] || fallo "con interactive_ready=false no debería retornar 0 (rc=$rc5)"
+
+# 6. idle con interactive_ready=true pero sin prompt '>' en pantalla: no retorna 0, vence al timeout.
+rm -f "$tmp/count"
+rc6=0
+timeout 10 env STUB_STATUS=idle STUB_INTERACTIVE_READY=true STUB_PROMPT="Cargando interfaz..." TRIO_READY_TTY="$tmp/tty" TRIO_READY_TIMEOUT=1 \
+  bash -c 'esperar_agente_listo pm-x' 2>/dev/null || rc6=$?
+[[ "$rc6" -eq 1 ]] || fallo "sin prompt '>' en pantalla no debería retornar 0 (rc=$rc6)"
+
 echo "OK espera de agente"

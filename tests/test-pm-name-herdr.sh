@@ -12,6 +12,7 @@ export PJ_TRIO_PM_PROMPT="$aqui/trio-pm-prompt.md"
 export TRIO_PANE_SETTLE_SECS=0
 export TRIO_READY_INTERVAL=0
 export TRIO_READY_TIMEOUT=2
+export TRIO_KICKOFF_VERIFY_SECS=0
 
 pj="$tmp/HR-DEMO"
 miembro="$tmp/miembro"
@@ -89,12 +90,14 @@ case "${1:-} ${2:-}" in
     ;;
   "agent get")
     target="${3:-}"
+    status_val="idle"
+    [[ -f "$STUB_DIR/agent_working" ]] && status_val="working"
     if [[ -f "$STUB_DIR/agent_${target}_ready" ]]; then
-      echo "{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"name\":\"$target\",\"agent_status\":\"idle\",\"interactive_ready\":true,\"workspace_id\":\"w-24\",\"pane_id\":\"w24:p1\"}}}"
+      echo "{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"name\":\"$target\",\"agent_status\":\"$status_val\",\"interactive_ready\":true,\"workspace_id\":\"w-24\",\"pane_id\":\"w24:p1\"}}}"
       exit 0
     fi
     if [[ "$target" == "w24:p1" && -f "$STUB_DIR/pm_unnamed_ready" ]]; then
-      echo '{"id":"cli:agent:get","result":{"agent":{"agent_status":"idle","workspace_id":"w-24","pane_id":"w24:p1"}}}'
+      echo "{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"$status_val\",\"interactive_ready\":true,\"workspace_id\":\"w-24\",\"pane_id\":\"w24:p1\"}}}"
       exit 0
     fi
     echo '{"error":{"code":"agent_not_found"}}'
@@ -109,6 +112,7 @@ case "${1:-} ${2:-}" in
       echo '{"error":{"code":"agent_not_found"}}'
       exit 1
     fi
+    touch "$STUB_DIR/agent_working"
     echo '{"result":{"ok":true}}'
     ;;
   *)
