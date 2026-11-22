@@ -35,14 +35,15 @@ _trio_pausa_manual() {
     return 0
 }
 
-# esperar_agente_listo <agente> [<pane_id>]: 0 si quedó idle sin diálogo de
-# confianza o si el usuario pulsó una tecla sobre el diálogo; 1 si venció el
-# timeout sin diálogo (o sin entrada de dónde leer la tecla).
-# Mira `herdr agent get` (status) y `herdr agent read` (pantalla).
+# esperar_agente_listo <agente> [<pane_id>]: 0 si quedó idle con
+# interactive_ready=true y el prompt `>` visible sin diálogo de confianza (o si
+# el usuario pulsó una tecla sobre el diálogo); 1 si venció el timeout sin
+# diálogo (o sin entrada de dónde leer la tecla).
+# Mira `herdr agent get` (agent_status + interactive_ready) y `herdr agent read` (pantalla).
 esperar_agente_listo() {
     local agente="$1" fallback_pane="${2:-}"
     local timeout="${TRIO_READY_TIMEOUT:-180}" intervalo="${TRIO_READY_INTERVAL:-2}"
-    local inicio=$SECONDS avisado=0 pausa=1 estado pantalla target
+    local inicio=$SECONDS avisado=0 pausa=1 agent_json estado interactive_ready pantalla target
     while (( SECONDS - inicio < timeout )); do
         target="$agente"
         if [[ -n "$fallback_pane" ]] && ! herdr agent get "$target" >/dev/null 2>&1; then
@@ -60,8 +61,12 @@ esperar_agente_listo() {
             # Sin tty de dónde leer la tecla: como antes, sondeo hasta el timeout.
             pausa=0
         else
-            estado="$(herdr agent get "$target" 2>/dev/null | jq -r '.result.agent.agent_status // .result.agent.status // .result.status // empty' 2>/dev/null || true)"
-            [[ "$estado" == idle ]] && return 0
+            agent_json="$(herdr agent get "$target" 2>/dev/null || true)"
+            estado="$(jq -r '.result.agent.agent_status // .result.agent.status // .result.status // empty' <<<"$agent_json" 2>/dev/null || true)"
+            interactive_ready="$(jq -r '.result.agent.interactive_ready // .result.interactive_ready // false' <<<"$agent_json" 2>/dev/null || true)"
+            if [[ "$estado" == idle && "$interactive_ready" == true ]] && grep -qE '^[[:space:]]*>[[:space:]]*$' <<<"$pantalla"; then
+                return 0
+            fi
         fi
         sleep "$intervalo"
     done
