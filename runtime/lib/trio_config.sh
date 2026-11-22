@@ -118,6 +118,19 @@ renderizar_kickoff() {
     fi
     local t
     t="$(cat "$prompt_template")"
+    if [[ "${modo_spec:-0}" -eq 1 ]]; then
+        local rama_spec="${base_rama:-<N>-<slug>}"
+        local spec_base_pr="${base_rama:-la rama por defecto}"
+        local flujo_spec
+        flujo_spec="1. Leé el spec y sus sub-issues vinculados (\`gh issue view {{TICKET}} -R {{ISSUE_REPO}} --comments\`) y escribí {{TRIO_DIR}}/plan.md con la rama del spec (${rama_spec}), el orden de sub-issues y sus criterios. Commit + push del meta-repo.
+2. Asegurá la rama del spec (${rama_spec}) en origin saliendo de {{BASE_REF}} (sin trabajar en el clon {{MIEMBRO_DIR}}): los worktrees de cada sub-issue saldrán de \`origin/${rama_spec}\` con \`ravn-git-bare-clone\`.
+3. Mandale el spec completo a WK vos mismo:
+   \`herdr agent prompt {{AGENTE_WK}} \"{{WK_RULE_PREFIX}}Sos WK del spec {{ISSUE_REPO}}#{{TICKET}}. Leé {{TRIO_DIR}}/plan.md y ejecutá /implement-spec sobre el spec #{{TICKET}}: por cada sub-issue creá un worktree nuevo con ravn-git-bare-clone sobre origin/${rama_spec}, implementá, corré /code-review y mergeá cada sub-PR a la rama del spec (${rama_spec}); al terminar todos los sub-issues, abrí el PR final de la rama del spec hacia ${spec_base_pr} con: gh pr create -R {{PR_REPO}}{{GH_PR_BASE}} (body con /pr referenciando {{ISSUE_REPO}}#{{TICKET}} y --draft según tus reglas), y escribí {{TRIO_DIR}}/wk.md con el PR final, head sha y pruebas.\"\`
+   Esperá con \`herdr agent wait {{AGENTE_WK}} --timeout 600000\` y confirmá con \`herdr agent read {{AGENTE_WK}}\` y que exista wk.md (si devuelve \`idle\` sin wk.md, verificá actividad antes de contarlo como fallo). Si falla, aplicá la sección Fallos."
+        local antes="${t%%1. Leé el ticket*}"
+        local despues="4. (Trivial o PR final)${t#*4. (Trivial o PR final)}"
+        t="${antes}${flujo_spec}"$'\n'"${despues}"
+    fi
     t="${t//\{\{PROYECTO\}\}/$project_name}"
     t="${t//\{\{PROYECTO_DIR\}\}/$project_dir}"
     t="${t//\{\{TICKET\}\}/$ticket}"

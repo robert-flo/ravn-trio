@@ -30,7 +30,7 @@ source "$PROJECT_DIR/lib/trio_agy.sh"
 
 mostrar_uso() {
     cat <<'EOF'
-Uso: pj-trio [start] [--dry-run] [--no-kickoff] [--print-kickoff] [--oneshot] [--kind <agy|cursor>] <proyecto> <ticket> [--repo <miembro>] [--ticket-repo <owner/repo>] [--base <rama>]
+Uso: pj-trio [start] [--dry-run] [--no-kickoff] [--print-kickoff] [--spec] [--oneshot] [--kind <agy|cursor>] <proyecto> <ticket> [--repo <miembro>] [--ticket-repo <owner/repo>] [--base <rama>]
 
 Argumentos:
   <proyecto>        Ruta o nombre del proyecto meta (pj-*).
@@ -39,6 +39,8 @@ Argumentos:
   <ticket>          Identificador numérico o alfanumérico del ticket / issue.
 
 Opciones:
+  --spec            Modo spec (1 trío por spec): orquesta el spec completo y su PR final
+                    (también se activa automáticamente si el issue tiene etiqueta 'spec').
   --oneshot         Modo oneshot: crea un workspace con 1 sola pestaña (os)
                     para el agente OS-<proyecto> y ejecuta trio-os-prompt.md.
   --kind <kind>     Plataforma de los agentes: agy (default) o cursor.
@@ -61,6 +63,7 @@ EOF
 dry_run=0
 kickoff=1
 print_kickoff=0
+modo_spec=0
 modo_oneshot=0
 kind_arg=""
 repo_arg=""
@@ -81,6 +84,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --print-kickoff)
             print_kickoff=1
+            shift
+            ;;
+        --spec)
+            modo_spec=1
             shift
             ;;
         --oneshot)
@@ -178,6 +185,11 @@ if [[ -n "$kind_arg" && "$kind_arg" != "agy" && "$kind_arg" != "cursor" ]]; then
     exit 1
 fi
 
+if [[ "$modo_spec" -eq 1 && "$modo_oneshot" -eq 1 ]]; then
+    print_error "--spec y --oneshot no se pueden usar juntos." >&2
+    exit 1
+fi
+
 if [[ "$ticket_repo_set" -eq 1 ]]; then
     if [[ ! "$ticket_repo_arg" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
         print_error "--ticket-repo: '$ticket_repo_arg' debe tener formato <owner/repo>." >&2
@@ -195,6 +207,13 @@ if [[ -n "$kind_arg" ]]; then
 fi
 trio_nombres
 trio_localizar_recursos
+
+# Detección automática de modo spec si el issue tiene etiqueta 'spec'.
+if [[ "$modo_oneshot" -eq 0 && "$modo_spec" -eq 0 && -n "${issue_repo:-}" ]] && command -v gh >/dev/null 2>&1; then
+    if gh issue view "$ticket" -R "$issue_repo" --json labels -q '.labels[].name' 2>/dev/null | grep -Fxq "spec"; then
+        modo_spec=1
+    fi
+fi
 
 # Con --base, la rama del spec tiene que existir en origin antes de abrir nada.
 if [[ -n "$base_rama" ]]; then
