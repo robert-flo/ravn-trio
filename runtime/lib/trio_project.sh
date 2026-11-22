@@ -334,8 +334,10 @@ trio_resolver_proyecto() {
         fi
     fi
 
-    # Repo de GitHub donde vive el issue: el miembro si hay --repo, si no el meta.
-    ticket_repo="${repo_slug:-${project_slug:-${repo_name:-$project_name}}}"
+    # Repo de GitHub donde viven el código y el PR (el miembro si hay --repo, si no el meta)
+    # y repo donde vive el issue (--ticket-repo si se pasó, si no igual al de PR).
+    pr_repo="${repo_slug:-${project_slug:-${repo_name:-$project_name}}}"
+    issue_repo="${ticket_repo_arg:-$pr_repo}"
 
     if [[ -n "$repo_name" ]]; then
         ws_label="trio ${project_name}/${repo_name}#${ticket}"

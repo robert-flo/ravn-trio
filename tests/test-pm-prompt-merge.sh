@@ -27,7 +27,7 @@ paso6="$(sed -n '/^6\. Si RV dice APRUEBO/,/^7\. Después del merge/p' "$prompt"
 grep -q 'mergeás vos' <<<"$paso6" || fallo "tras APRUEBO el PM debería mergear"
 grep -q 'gh pr merge' <<<"$paso6" || fallo "falta el comando de merge en el paso 6"
 grep -q 'NO mergees: volvé al paso 4' <<<"$paso6" || fallo "falta la regla: si el head cambió, otra revisión"
-grep -qF 'gh pr view <pr> -R {{TICKET_REPO}} --json body -q .body' <<<"$paso6" || fallo "falta lectura de body del PR para Merge Danger"
+grep -qF 'gh pr view <pr> -R {{PR_REPO}} --json body -q .body' <<<"$paso6" || fallo "falta lectura de body del PR para Merge Danger"
 grep -q 'Door: two-way' <<<"$paso6" || fallo "falta condición Door: two-way"
 grep -q 'Blast Radius: Low' <<<"$paso6" || fallo "falta condición Blast Radius: Low"
 grep -qi 'case-insensitive' <<<"$paso6" || fallo "falta aclaración case-insensitive"
@@ -52,10 +52,10 @@ grep -q '{{' <<<"$k" && fallo "quedan placeholders sin sustituir en kickoff"
 grep -qF 'trio pj-demo/miembro#42' <<<"$k" || fallo "{{WORKSPACE_NOMBRE}} no se sustituyó en kickoff"
 
 # Versión en herdr-plugin.toml.
-grep -qFx 'version = "0.1.16"' "$aqui/herdr-plugin.toml" || fallo "herdr-plugin.toml debe estar en version = \"0.1.16\""
+grep -qFx 'version = "0.1.17"' "$aqui/herdr-plugin.toml" || fallo "herdr-plugin.toml debe estar en version = \"0.1.17\""
 
 # El WK abre el PR con gh pr create explícito y la base del ticket.
-grep -qF 'gh pr create -R {{TICKET_REPO}}{{GH_PR_BASE}}' "$prompt" || fallo "falta gh pr create con la base en el encargo al WK"
+grep -qF 'gh pr create -R {{PR_REPO}}{{GH_PR_BASE}}' "$prompt" || fallo "falta gh pr create con la base en el encargo al WK"
 
 # El README también dice que con head nuevo no se mergea y que se avisa a Roberto.
 grep -q 'Si el head cambió después del APRUEBO, no mergea y pide otra revisión' "$readme" || fallo "README sin la regla del head que cambió"

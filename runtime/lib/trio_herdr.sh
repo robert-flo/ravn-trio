@@ -70,13 +70,13 @@ enviar_kickoff() {
     fi
     if ! esperar_agente_listo "$target_agent"; then
         print_warn "${target_agent} no quedó listo a tiempo; no envío el arranque." >&2
-        print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}" >&2
+        print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}${ticket_repo_arg:+ --ticket-repo $ticket_repo_arg}" >&2
         return 0
     fi
     local out
     if ! out="$(herdr agent prompt "$target_agent" "$texto" 2>&1)"; then
         print_warn "no se pudo enviar el arranque a ${target_agent}: ${out}" >&2
-        print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}" >&2
+        print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}${ticket_repo_arg:+ --ticket-repo $ticket_repo_arg}" >&2
         return 0
     fi
     "$trio_status" "$trio_dir" en-curso plan
