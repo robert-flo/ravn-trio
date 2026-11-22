@@ -297,4 +297,268 @@ out_to="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --snapshot "$s
 jq -e '.status == "timeout"' <<<"$out_to" >/dev/null \
   || fallo "salida JSON de timeout inesperada: $out_to"
 
+# 6. --ticket: validación de argumentos vacíos o faltantes -> exit 1
+check_bad_ticket() {
+  local rc=0 err=""
+  err="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" "$@" 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 ]] || fallo "esperaba exit 1 para ($*), obtuve $rc ($err)"
+  [[ "$err" != *"opción desconocida"* ]] || fallo "--ticket debería ser reconocida, no desconocida ($err)"
+}
+check_bad_ticket --ticket
+check_bad_ticket --ticket ""
+check_bad_ticket --ticket ","
+check_bad_ticket --ticket "a,,b"
+check_bad_ticket --ticket "a,"
+check_bad_ticket --ticket --json
+
+# 7. --ticket: ignora cambios en otros tickets (124), no llama herdr agent get en ajenos, y despierta con el filtrado (JSON y texto)
+mkdir -p "$pj/.trio/rf-dotfiles-55"
+cat > "$pj/.trio/ravn-trio-21/status.json" <<'EOF'
+{
+  "ticket": "ravn-trio-21",
+  "estado": "en-curso",
+  "paso": "wk",
+  "timestamp": "2026-11-17T09:20:00-06:00"
+}
+EOF
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+{
+  "ticket": "rf-dotfiles-55",
+  "estado": "en-curso",
+  "paso": "wk",
+  "timestamp": "2026-11-17T09:20:00-06:00"
+}
+EOF
+
+herdr_log="$tmp/herdr_ticket_log"
+: > "$herdr_log"
+cat > "$tmp/bin_stubs/herdr" <<EOF
+#!/usr/bin/env bash
+case "\${1:-} \${2:-}" in
+  "agent get")
+    echo "\${3:-}" >> "$herdr_log"
+    echo "{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"name\":\"\${3:-}\",\"agent_status\":\"running\"}}}"
+    ;;
+  "agent read")
+    echo "linea-tail de \${3:-}"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+EOF
+chmod +x "$tmp/bin_stubs/herdr"
+
+cat > "$tmp/bin_stubs/inotifywait" <<EOF
+#!/usr/bin/env bash
+mode="\$(cat "$inotify_mode" 2>/dev/null || echo noop)"
+case "\$mode" in
+  change_other_then_sleep)
+    cat > "$pj/.trio/ravn-trio-21/status.json" <<'JSON'
+{
+  "ticket": "ravn-trio-21",
+  "estado": "hecho",
+  "paso": "merge",
+  "timestamp": "2026-11-17T09:21:00-06:00"
+}
+JSON
+    sleep 2
+    exit 0
+    ;;
+  change_filtered_55)
+    cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'JSON'
+{
+  "ticket": "rf-dotfiles-55",
+  "estado": "hecho",
+  "paso": "merge",
+  "timestamp": "2026-11-17T09:22:00-06:00"
+}
+JSON
+    exit 0
+    ;;
+  sleep_timeout)
+    sleep 2
+    exit 2
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+EOF
+chmod +x "$tmp/bin_stubs/inotifywait"
+
+echo "change_other_then_sleep" > "$inotify_mode"
+rc=0
+out_other="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket rf-dotfiles-55 --timeout 1 --json)" || rc=$?
+[[ "$rc" -eq 124 ]] || fallo "esperaba exit 124 al cambiar otro ticket, obtuve $rc ($out_other)"
+if grep -q 'ravn-trio-21' "$herdr_log"; then
+  fallo "no debía invocar herdr agent get para ticket ajeno ravn-trio-21: $(cat "$herdr_log")"
+fi
+
+echo "change_filtered_55" > "$inotify_mode"
+out_f55="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket rf-dotfiles-55 --timeout 5 --json)"
+jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == "rf-dotfiles-55" and .events[0].estado == "hecho"' <<<"$out_f55" >/dev/null \
+  || fallo "esperaba evento de rf-dotfiles-55 en --json: $out_f55"
+
+# Mismo caso en salida de texto legible
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+{
+  "ticket": "rf-dotfiles-55",
+  "estado": "en-curso",
+  "paso": "wk",
+  "timestamp": "2026-11-17T09:20:00-06:00"
+}
+EOF
+out_f55_txt="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket rf-dotfiles-55 --timeout 5)"
+grep -q 'rf-dotfiles-55 \[estado\]' <<<"$out_f55_txt" \
+  || fallo "esperaba evento de rf-dotfiles-55 en salida legible: $out_f55_txt"
+if grep -q 'ravn-trio-21' <<<"$out_f55_txt"; then
+  fallo "no debía aparecer ticket ajeno en salida legible: $out_f55_txt"
+fi
+
+# 8. --ticket: repetido, separado por comas, sufijo numérico y campo .ticket del JSON
+mkdir -p "$pj/.trio/custom-dir"
+cat > "$pj/.trio/custom-dir/status.json" <<'EOF'
+{
+  "ticket": "alias-99",
+  "estado": "en-curso",
+  "paso": "wk",
+  "timestamp": "2026-11-17T09:20:00-06:00"
+}
+EOF
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+{
+  "ticket": "rf-dotfiles-55",
+  "estado": "en-curso",
+  "paso": "wk",
+  "timestamp": "2026-11-17T09:20:00-06:00"
+}
+EOF
+echo "change_filtered_55" > "$inotify_mode"
+# Match numérico: --ticket 55 matchea rf-dotfiles-55
+out_num="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket 55 --timeout 5 --json)"
+jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == "rf-dotfiles-55"' <<<"$out_num" >/dev/null \
+  || fallo "match numérico --ticket 55 falló: $out_num"
+
+# Repetido: --ticket ravn-trio-21 --ticket 55
+# ravn-trio-21 quedó en hecho en el caso 7; si no se reinicia, el arranque
+# con --ticket lo toma como evento y no llega a ver el cambio de 55.
+cat > "$pj/.trio/ravn-trio-21/status.json" <<'EOF'
+{
+  "ticket": "ravn-trio-21",
+  "estado": "en-curso",
+  "paso": "wk",
+  "timestamp": "2026-11-17T09:20:00-06:00"
+}
+EOF
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+{
+  "ticket": "rf-dotfiles-55",
+  "estado": "en-curso",
+  "paso": "wk",
+  "timestamp": "2026-11-17T09:20:00-06:00"
+}
+EOF
+out_rep="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket ravn-trio-21 --ticket 55 --timeout 5 --json)"
+jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == "rf-dotfiles-55"' <<<"$out_rep" >/dev/null \
+  || fallo "--ticket repetido falló: $out_rep"
+
+# Separado por comas: --ticket alias-99,rf-dotfiles-55
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+{
+  "ticket": "rf-dotfiles-55",
+  "estado": "en-curso",
+  "paso": "wk",
+  "timestamp": "2026-11-17T09:20:00-06:00"
+}
+EOF
+out_csv="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket alias-99,rf-dotfiles-55 --timeout 5 --json)"
+jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == "rf-dotfiles-55"' <<<"$out_csv" >/dev/null \
+  || fallo "--ticket separado por comas falló: $out_csv"
+
+# 9. Race condition en arranque sin --snapshot:
+# 9a. Con --ticket y ticket ya en hecho -> despierta inmediato (exit 0)
+echo "sleep_timeout" > "$inotify_mode"
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+{
+  "ticket": "rf-dotfiles-55",
+  "estado": "hecho",
+  "paso": "merge",
+  "timestamp": "2026-11-17T09:25:00-06:00"
+}
+EOF
+out_race_hecho="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket rf-dotfiles-55 --timeout 5 --json)"
+jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == "rf-dotfiles-55" and .events[0].estado == "hecho"' <<<"$out_race_hecho" >/dev/null \
+  || fallo "race condition con --ticket ya en hecho falló: $out_race_hecho"
+
+# 9b. Con --ticket (matching por campo .ticket) y ya en needs-roberto -> despierta inmediato (exit 0)
+cat > "$pj/.trio/custom-dir/status.json" <<'EOF'
+{
+  "ticket": "alias-99",
+  "estado": "needs-roberto",
+  "paso": "merge",
+  "timestamp": "2026-11-17T09:26:00-06:00"
+}
+EOF
+out_race_nr="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket alias-99 --timeout 5 --json)"
+jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == "custom-dir" and .events[0].estado == "needs-roberto"' <<<"$out_race_nr" >/dev/null \
+  || fallo "race condition con --ticket ya en needs-roberto (match .ticket) falló: $out_race_nr"
+jq -r '.events[0].tail' <<<"$out_race_nr" | grep -q 'linea-tail de' \
+  || fallo "race condition needs-roberto debía incluir tail: $out_race_nr"
+
+# 9c. Con --ticket y ya en en-curso con pm_herdr_status blocked -> despierta inmediato (exit 0)
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+{
+  "ticket": "rf-dotfiles-55",
+  "estado": "en-curso",
+  "paso": "wk",
+  "timestamp": "2026-11-17T09:27:00-06:00"
+}
+EOF
+cat > "$tmp/bin_stubs/herdr" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "agent get")
+    echo "{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"name\":\"${3:-}\",\"agent_status\":\"blocked\"}}}"
+    ;;
+  "agent read")
+    echo "linea-blocked de ${3:-}"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+EOF
+chmod +x "$tmp/bin_stubs/herdr"
+out_race_blk="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket 55 --timeout 5 --json)"
+jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == "rf-dotfiles-55" and .events[0].pm_herdr_status == "blocked"' <<<"$out_race_blk" >/dev/null \
+  || fallo "race condition con --ticket ya en blocked falló: $out_race_blk"
+
+# 9d. Sin --ticket y sin --snapshot: un ticket ya en hecho NO despierta -> timeout 124
+rm -rf "$pj/.trio/custom-dir" "$pj/.trio/rf-dotfiles-55"
+cat > "$pj/.trio/ravn-trio-21/status.json" <<'EOF'
+{
+  "ticket": "ravn-trio-21",
+  "estado": "hecho",
+  "paso": "merge",
+  "timestamp": "2026-11-17T09:28:00-06:00"
+}
+EOF
+rc=0
+out_no_filter="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --timeout 1 --json)" || rc=$?
+[[ "$rc" -eq 124 ]] || fallo "sin --ticket un ticket ya en hecho NO debía despertar, obtuve rc=$rc ($out_no_filter)"
+
+# 10. Ayuda y completion incluyen --ticket
+"$aqui/pj-trio" watch --help | grep -q -- '--ticket' \
+  || fallo "pj-trio watch --help debe documentar --ticket"
+comp_out="$(bash -c '
+  source "'"$aqui"'/runtime/completion/pj-trio.bash"
+  COMP_WORDS=(pj-trio watch --)
+  COMP_CWORD=2
+  _pj_trio_completion
+  printf "%s\n" "${COMPREPLY[@]}"
+')"
+grep -qx -- '--ticket' <<<"$comp_out" \
+  || fallo "completion de pj-trio watch debe incluir --ticket, obtuve: $comp_out"
+
 echo "OK watch"
