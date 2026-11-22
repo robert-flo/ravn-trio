@@ -55,7 +55,10 @@ out="$(cd / && "$aqui/pj-trio" --dry-run "$raiz/2026-10-26-robert-flo-pj-ravn" 3
 for r in pm wk rv; do
     grep -q "herdr agent start \"$r-git-setup-3\"" <<<"$out" || fallo "nombre corto $r: $out"
 done
-grep -q -- "herdr agent start \"pm-git-setup-3\".* -i " <<<"$out" || fallo "arranque vía agy -i del mismo PM"
+if grep -q -- "herdr agent start \"pm-git-setup-3\".* -i " <<<"$out"; then
+    fallo "PM con agy no debe llevar -i al arrancar"
+fi
+grep -q -- 'herdr agent prompt "pm-git-setup-3" ' <<<"$out" || fallo "arranque vía herdr agent prompt del mismo PM"
 # Largo: truncado + hash, determinista y único.
 clon "$raiz/2026-10-26-robert-flo-pj-ravn/rf-un-miembro-con-nombre-larguisimo-a" un-miembro-con-nombre-larguisimo-a
 clon "$raiz/2026-10-26-robert-flo-pj-ravn/rf-un-miembro-con-nombre-larguisimo-b" un-miembro-con-nombre-larguisimo-b

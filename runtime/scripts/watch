@@ -189,27 +189,20 @@ collect_snapshot() {
     if [[ "$clave" =~ ^(.+)-([0-9]+)$ ]]; then
       repo_name="${BASH_REMATCH[1]}"
       ticket="${BASH_REMATCH[2]}"
+      ws_label_lookup="trio ${project_name}/${repo_name}#${ticket}"
     else
       repo_name=""
       ticket="$clave"
+      ws_label_lookup="trio ${project_name}#${ticket}"
     fi
     pm_agent="$(nombre_agente pm)"
 
     pm_herdr_status=""
     if [[ "$estado" == "en-curso" ]] && command -v herdr >/dev/null 2>&1; then
-      agent_json="$(herdr agent get "$pm_agent" 2>/dev/null || true)"
-      if [[ -n "$agent_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$agent_json"; then
-        pm_herdr_status="$(jq -r '.result.agent.agent_status // "unknown"' <<<"$agent_json")"
-      else
-        os_agent="$(nombre_agente os)"
-        os_json="$(herdr agent get "$os_agent" 2>/dev/null || true)"
-        if [[ -n "$os_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$os_json"; then
-          pm_agent="$os_agent"
-          pm_herdr_status="$(jq -r '.result.agent.agent_status // "unknown"' <<<"$os_json")"
-        else
-          pm_herdr_status="unknown"
-        fi
-      fi
+      os_agent="$(nombre_agente os)"
+      trio_resolver_agente_herdr "$pm_agent" "$os_agent" "$ws_label_lookup" "$ticket" "unknown"
+      pm_agent="$trio_herdr_target"
+      pm_herdr_status="$trio_herdr_status"
     fi
 
     item="$(jq -n \

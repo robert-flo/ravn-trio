@@ -35,16 +35,20 @@ _trio_pausa_manual() {
     return 0
 }
 
-# esperar_agente_listo <agente>: 0 si quedó idle sin diálogo de confianza o si
-# el usuario pulsó una tecla sobre el diálogo; 1 si venció el timeout sin
-# diálogo (o sin entrada de dónde leer la tecla).
+# esperar_agente_listo <agente> [<pane_id>]: 0 si quedó idle sin diálogo de
+# confianza o si el usuario pulsó una tecla sobre el diálogo; 1 si venció el
+# timeout sin diálogo (o sin entrada de dónde leer la tecla).
 # Mira `herdr agent get` (status) y `herdr agent read` (pantalla).
 esperar_agente_listo() {
-    local agente="$1"
+    local agente="$1" fallback_pane="${2:-}"
     local timeout="${TRIO_READY_TIMEOUT:-180}" intervalo="${TRIO_READY_INTERVAL:-2}"
-    local inicio=$SECONDS avisado=0 pausa=1 estado pantalla
+    local inicio=$SECONDS avisado=0 pausa=1 estado pantalla target
     while (( SECONDS - inicio < timeout )); do
-        pantalla="$(herdr agent read "$agente" 2>/dev/null | tail -n 60 || true)"
+        target="$agente"
+        if [[ -n "$fallback_pane" ]] && ! herdr agent get "$target" >/dev/null 2>&1; then
+            target="$fallback_pane"
+        fi
+        pantalla="$(herdr agent read "$target" 2>/dev/null | tail -n 60 || true)"
         if grep -qiE 'trust (the contents of )?this (project|folder)|Yes, I trust this folder' <<<"$pantalla"; then
             if [[ "$avisado" -eq 0 ]]; then
                 trio_notificar "${agente}: agy pide confiar en la carpeta. Aceptá el diálogo en herdr y pulsá Enter para continuar."
@@ -56,7 +60,7 @@ esperar_agente_listo() {
             # Sin tty de dónde leer la tecla: como antes, sondeo hasta el timeout.
             pausa=0
         else
-            estado="$(herdr agent get "$agente" 2>/dev/null | jq -r '.result.agent.status // .result.status // empty' 2>/dev/null || true)"
+            estado="$(herdr agent get "$target" 2>/dev/null | jq -r '.result.agent.agent_status // .result.agent.status // .result.status // empty' 2>/dev/null || true)"
             [[ "$estado" == idle ]] && return 0
         fi
         sleep "$intervalo"
