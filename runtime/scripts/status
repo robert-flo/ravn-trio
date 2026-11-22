@@ -18,7 +18,7 @@ show_status_help() {
 
   Esquema de status.json (las claves no indicadas se conservan del archivo previo):
     ticket        id del ticket (nombre de <trio_dir>)
-    estado        en-curso | hecho | needs-roberto
+    estado        en-curso | hecho | needs-roberto | blocked
     paso          plan | wk | rv | merge | cierre
     error         motivo del fallo ("" si hay)
     intentos      intentos hechos en el paso actual (1 o 2)
@@ -60,7 +60,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ ${#pos[@]} -eq 3 ]] || { print_error "se requieren <trio_dir> <estado> <paso>." >&2; exit 1; }
 trio_dir="${pos[0]}"; estado="${pos[1]}"; paso="${pos[2]}"
-case "$estado" in en-curso|hecho|needs-roberto) ;; *) print_error "estado inválido '$estado'." >&2; exit 1 ;; esac
+case "$estado" in en-curso|hecho|needs-roberto|blocked) ;; *) print_error "estado inválido '$estado'." >&2; exit 1 ;; esac
 case "$paso" in plan|wk|rv|merge|cierre) ;; *) print_error "paso inválido '$paso'." >&2; exit 1 ;; esac
 
 previo="{}"
@@ -98,7 +98,7 @@ cuerpo="paso $paso${error:+: $error}"
 sonido="none"
 case "$estado" in
     hecho) sonido="done" ;;
-    needs-roberto) sonido="request" ;;
+    needs-roberto|blocked) sonido="request" ;;
     en-curso) sonido="none" ;;
 esac
 

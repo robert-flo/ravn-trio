@@ -137,7 +137,7 @@ for status_file in "${status_files[@]}"; do
 
   estado="$(jq -r '.estado // ""' <<<"$raw_status")"
   if [[ "$activos" -eq 1 ]]; then
-    if [[ "$estado" != "en-curso" && "$estado" != "needs-roberto" && -z "$workspace_id" ]]; then
+    if [[ "$estado" != "en-curso" && "$estado" != "needs-roberto" && "$estado" != "blocked" && -z "$workspace_id" ]]; then
       continue
     fi
   fi

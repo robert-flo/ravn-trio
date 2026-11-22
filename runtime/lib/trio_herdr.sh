@@ -54,6 +54,21 @@ fijar_identidad_git() {
     done
 }
 
+# _kickoff_aceptado <target>: 0 si el agente salió de idle o muestra actividad.
+_kickoff_aceptado() {
+    local target="$1" agent_json estado pantalla
+    agent_json="$(trio_herdr agent get "$target" 2>/dev/null || true)"
+    estado="$(jq -r '.result.agent.agent_status // .result.agent.status // .result.status // empty' <<<"$agent_json" 2>/dev/null || true)"
+    if [[ -n "$estado" && "$estado" != "idle" ]]; then
+        return 0
+    fi
+    pantalla="$(trio_herdr agent read "$target" 2>/dev/null | tail -n 30 || true)"
+    if grep -qiE 'Generating\.\.\.' <<<"$pantalla"; then
+        return 0
+    fi
+    return 1
+}
+
 # Envío del arranque al PM o al OS: una sola vez por ticket (marcador status.json).
 enviar_kickoff() {
     local target_rol="pm" target_kind="$PM_KIND" target_agent="$agent_pm" target_pane="${pm_pane:-}"
@@ -117,10 +132,33 @@ enviar_kickoff() {
     if [[ -n "$target_pane" ]] && ! trio_herdr agent get "$target_agent" >/dev/null 2>&1; then
         prompt_target="$target_pane"
     fi
-    local out
-    if ! out="$(trio_herdr agent prompt "$prompt_target" "$texto" 2>&1)"; then
-        print_warn "no se pudo enviar el arranque a ${target_agent}: ${out}" >&2
+    local max_reintentos="${TRIO_KICKOFF_RETRIES:-2}"
+    local verify_secs="${TRIO_KICKOFF_VERIFY_SECS:-2}"
+    local intento=1 max_intentos=$(( max_reintentos + 1 )) kickoff_ok=0 out
+    while (( intento <= max_intentos )); do
+        if ! out="$(trio_herdr agent prompt "$prompt_target" "$texto" 2>&1)"; then
+            print_warn "no se pudo enviar el arranque a ${target_agent}: ${out}" >&2
+            print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}${ticket_repo_arg:+ --ticket-repo $ticket_repo_arg}" >&2
+            return 0
+        fi
+        if [[ "$verify_secs" != "0" ]]; then
+            sleep "$verify_secs"
+        fi
+        if _kickoff_aceptado "$prompt_target"; then
+            kickoff_ok=1
+            break
+        fi
+        if (( intento < max_intentos )); then
+            print_warn "${target_agent} siguió idle tras el arranque (intento ${intento}/${max_intentos}); limpio la línea (Ctrl+U) y reintento..." >&2
+            trio_herdr agent send-keys "$prompt_target" ctrl+u >/dev/null 2>&1 || true
+        fi
+        intento=$(( intento + 1 ))
+    done
+    if [[ "$kickoff_ok" -eq 0 ]]; then
+        local err_kickoff="kickoff no procesado por ${target_agent} tras ${max_reintentos} reintentos (sigue idle con texto en prompt)"
+        print_warn "${err_kickoff}; marco status.json como blocked." >&2
         print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}${ticket_repo_arg:+ --ticket-repo $ticket_repo_arg}" >&2
+        "$trio_status" "${status_session_args[@]}" "$trio_dir" blocked plan --cola-de "$prompt_target" --error "$err_kickoff"
         return 0
     fi
     if [[ -f "${trio_dir}/status.json" ]]; then

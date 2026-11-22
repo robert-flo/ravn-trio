@@ -252,10 +252,10 @@ diff_snapshots() {
             or (($c.pm_herdr_status != $p.pm_herdr_status) and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
           else
             if $p == null then
-              ($c.estado == "hecho" or $c.estado == "needs-roberto")
+              ($c.estado == "hecho" or $c.estado == "needs-roberto" or $c.estado == "blocked")
               or ($c.estado == "en-curso" and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
             else
-              (($c.estado != $p.estado) and ($c.estado == "hecho" or $c.estado == "needs-roberto"))
+              (($c.estado != $p.estado) and ($c.estado == "hecho" or $c.estado == "needs-roberto" or $c.estado == "blocked"))
               or ($c.estado == "en-curso" and ($c.pm_herdr_status != $p.pm_herdr_status) and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
             end
           end
@@ -305,7 +305,7 @@ enrich_and_emit() {
     pm_agent="$(jq -r '.pm_agent // ""' <<<"$ev")"
     tail_out=""
 
-    if [[ "$estado" == "needs-roberto" || "$pm_status" == "blocked" || "$pm_status" == "unknown" ]]; then
+    if [[ "$estado" == "needs-roberto" || "$estado" == "blocked" || "$pm_status" == "blocked" || "$pm_status" == "unknown" ]]; then
       if [[ -n "$pm_agent" ]] && command -v herdr >/dev/null 2>&1; then
         tail_out="$(herdr agent read "$pm_agent" 2>/dev/null | tail -n 25 || true)"
       fi
