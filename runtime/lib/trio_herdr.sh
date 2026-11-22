@@ -28,11 +28,12 @@ fijar_identidad_git() {
 
 # Envío del arranque al PM o al OS: una sola vez por ticket (marcador status.json).
 enviar_kickoff() {
-    local target_rol="pm" target_kind="$PM_KIND" target_agent="$agent_pm"
+    local target_rol="pm" target_kind="$PM_KIND" target_agent="$agent_pm" target_pane="${pm_pane:-}"
     if [[ "${modo_oneshot:-0}" -eq 1 ]]; then
         target_rol="os"
         target_kind="$OS_KIND"
         target_agent="$agent_os"
+        target_pane="${os_pane:-}"
     fi
     if [[ "$kickoff" -eq 0 || -z "$target_kind" ]]; then
         return 0
@@ -45,7 +46,7 @@ enviar_kickoff() {
         return 0
     fi
     if [[ "${kickoff_en_arranque:-0}" -eq 1 ]]; then
-        # agy/cursor ya recibió el arranque al iniciar.
+        # cursor ya recibió el arranque al iniciar.
         echo "Arranque enviado a ${target_agent} al iniciar ${target_kind} (sesión interactiva)."
         if [[ -f "${trio_dir}/status.json" ]]; then
             echo "status.json ya existía; se conserva (el agente retoma desde ahí)."
@@ -56,30 +57,42 @@ enviar_kickoff() {
         fi
         return 0
     fi
-    if [[ -f "${trio_dir}/status.json" ]]; then
+    if [[ -f "${trio_dir}/status.json" && "${pm_recien_lanzado:-0}" -eq 0 ]]; then
         echo "Arranque ya enviado (existe ${trio_dir}/status.json); no se reenvía."
         return 0
     fi
-    local texto
-    texto="$(renderizar_kickoff)" || return 1
+    local kickoff_file="${pm_kickoff_file:-${trio_dir}/kickoff.md}"
+    local texto="Lee y segui al pie de la letra las instrucciones de arranque del archivo ${kickoff_file}"
     if [[ "$dry_run" -eq 1 ]]; then
         echo "[dry-run] mkdir -p \"$trio_dir\""
-        echo "[dry-run] herdr agent prompt \"$target_agent\" \"<trio-${target_rol}-prompt.md renderizado>\""
+        echo "[dry-run] herdr agent prompt \"$target_agent\" \"$texto\""
         "$trio_status" --dry-run "$trio_dir" en-curso plan
         return 0
     fi
-    if ! esperar_agente_listo "$target_agent"; then
+    if [[ ! -f "$kickoff_file" ]]; then
+        mkdir -p "$trio_dir"
+        renderizar_kickoff > "$kickoff_file" || return 1
+    fi
+    if [[ "${pm_start_confirmed:-0}" -eq 0 ]] && ! esperar_agente_listo "$target_agent" "$target_pane"; then
         print_warn "${target_agent} no quedó listo a tiempo; no envío el arranque." >&2
         print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}${ticket_repo_arg:+ --ticket-repo $ticket_repo_arg}" >&2
         return 0
     fi
+    local prompt_target="$target_agent"
+    if [[ -n "$target_pane" ]] && ! herdr agent get "$target_agent" >/dev/null 2>&1; then
+        prompt_target="$target_pane"
+    fi
     local out
-    if ! out="$(herdr agent prompt "$target_agent" "$texto" 2>&1)"; then
+    if ! out="$(herdr agent prompt "$prompt_target" "$texto" 2>&1)"; then
         print_warn "no se pudo enviar el arranque a ${target_agent}: ${out}" >&2
         print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}${ticket_repo_arg:+ --ticket-repo $ticket_repo_arg}" >&2
         return 0
     fi
-    "$trio_status" "$trio_dir" en-curso plan
+    if [[ -f "${trio_dir}/status.json" ]]; then
+        echo "status.json ya existía; se conserva (el agente retoma desde ahí)."
+    else
+        "$trio_status" "$trio_dir" en-curso plan
+    fi
 }
 
 # 5. Verificación de agentes disponibles para agy y cursor
@@ -234,15 +247,9 @@ trio_construir_args_agente() {
         # El pane abre en el miembro; el meta-repo se añade al workspace de agy.
         trio_agent_args+=(--add-dir "$project_dir")
     fi
-    # agy 1.4.x: -i/--prompt-interactive envía el prompt inicial y sigue interactivo
-    # (https://antigravity.google/docs/cli/reference/). Evita depender de herdr agent prompt.
-    # herdr 0.9.5 rechaza argumentos con caracteres de control (saltos de línea)
-    # (herdrdev/herdr src/app/agents.rs:159, error invalid_agent_argument): el
-    # arranque va a un archivo y -i lleva solo una línea que apunta a él.
-    if [[ ("$role" == PM || "$role" == OS) && "$kind" == agy && "$kickoff" -eq 1 && -n "$kickoff_file" ]]; then
-        trio_agent_args+=(-i "Lee y segui al pie de la letra las instrucciones de arranque del archivo ${kickoff_file}")
-        trio_kickoff_inline=1
-    fi
+    # Para agy se arranca sin -i para que herdr detecte interactive_ready=true
+    # y registre el `name` del agente; luego enviar_kickoff manda el arranque
+    # de una línea vía `herdr agent prompt` apuntando a kickoff.md.
 }
 
 # 11. Inicio de agentes por rol
@@ -290,16 +297,36 @@ iniciar_agente_rol() {
         mkdir -p "$trio_dir"
         if renderizar_kickoff > "$archivo_kickoff"; then
             echo "${role}: arranco ${kind} apuntando al arranque en ${archivo_kickoff} (ticket ${ticket})."
+            pm_kickoff_file="$archivo_kickoff"
         else
             archivo_kickoff=""
         fi
     fi
 
+    [[ "$role" == PM || "$role" == OS ]] && pm_recien_lanzado=1
+
     trio_construir_args_agente "$role" "$kind" "$archivo_kickoff"
     kickoff_target="$trio_kickoff_inline"
 
-    local start_output
-    if ! start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${trio_agent_args[@]}" 2>&1)"; then
+    # Margen breve para que el shell del pane recién creado termine de tomar el PTY.
+    if [[ "${TRIO_PANE_SETTLE_SECS:-0.3}" != "0" ]]; then
+        sleep "${TRIO_PANE_SETTLE_SECS:-0.3}"
+    fi
+
+    local start_output="" start_ok=0 intento
+    for intento in 1 2; do
+        if start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${trio_agent_args[@]}" 2>&1)"; then
+            start_ok=1
+            break
+        fi
+        if [[ "$intento" -eq 1 ]] && echo "$start_output" | grep -qi "no longer owns the target terminal"; then
+            sleep "${TRIO_START_RETRY_SECS:-1}"
+            continue
+        fi
+        break
+    done
+
+    if [[ "$start_ok" -eq 0 ]]; then
         # Si el agente requiere interacción o confirmación inicial (ej. prompts de bienvenida o permisos),
         # herdr reporta agent_not_ready. El proceso queda corriendo en el panel.
         # agent_not_ready y timeout (herdr src/cli/agent.rs:722-727, tras escribir ya el
@@ -309,12 +336,16 @@ iniciar_agente_rol() {
             if [[ "$kickoff_target" -eq 1 ]]; then kickoff_en_arranque=1; fi
         else
             if [[ "$role" == PM || "$role" == OS ]]; then pm_fallo_inicio=1; fi
-            local err_msg
+            local err_msg pane_tail
             err_msg="$(echo "$start_output" | jq -r '.error.message // empty' 2>/dev/null || true)"
             if [[ -n "$err_msg" ]]; then
                 print_warn "no se pudo iniciar automáticamente el agente para ${role}: ${err_msg}" >&2
             else
                 print_warn "no se pudo iniciar automáticamente el agente para ${role}: ${start_output}" >&2
+            fi
+            pane_tail="$(herdr pane read "$pane_id" 2>/dev/null | tail -n 20 || true)"
+            if [[ -n "$pane_tail" ]]; then
+                print_warn "Última salida del pane ${pane_id}:"$'\n'"${pane_tail}" >&2
             fi
             if [[ "$role" == PM || "$role" == OS ]]; then
                 print_error "el ${role} no arrancó; no se envía el arranque ni se marca status.json." >&2
@@ -326,6 +357,7 @@ iniciar_agente_rol() {
             fi
         fi
     else
+        [[ "$role" == PM || "$role" == OS ]] && pm_start_confirmed=1
         if [[ "$kickoff_target" -eq 1 ]]; then kickoff_en_arranque=1; fi
     fi
 }

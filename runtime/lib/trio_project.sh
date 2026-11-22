@@ -403,3 +403,79 @@ nombre_agente() {
     fi
     echo "$nombre"
 }
+
+# Resuelve el estado y target herdr del PM/OS de un trío.
+# Primero busca por name (`herdr agent get <pm>` y `<os>`). Si no aparece por
+# name, busca por workspace_id / pane_id del trío (`trio <proyecto>[/<repo>]#<ticket>`).
+# Exporta: trio_herdr_target, trio_herdr_status, trio_herdr_ws_id.
+trio_resolver_agente_herdr() {
+    local pm_name="$1" os_name="$2" ws_label_lookup="$3" ticket_num="$4" default_status="${5:-unknown}"
+    local ws_list_json="${6:-}" agent_list_json="${7:-}"
+
+    trio_herdr_target="$pm_name"
+    trio_herdr_status="$default_status"
+    trio_herdr_ws_id=""
+
+    local agent_json candidate
+    for candidate in "$pm_name" "$os_name"; do
+        [[ -n "$candidate" ]] || continue
+        agent_json="$(herdr agent get "$candidate" 2>/dev/null || true)"
+        if [[ -n "$agent_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$agent_json"; then
+            trio_herdr_target="$candidate"
+            trio_herdr_status="$(jq -r --arg d "$default_status" '.result.agent.agent_status // $d' <<<"$agent_json")"
+            trio_herdr_ws_id="$(jq -r '.result.agent.workspace_id // ""' <<<"$agent_json")"
+            return 0
+        fi
+    done
+
+    if [[ -z "$ws_list_json" ]]; then
+        ws_list_json="$(herdr workspace list 2>/dev/null || true)"
+    fi
+    if [[ -n "$ws_list_json" ]] && jq -e '.result.workspaces' >/dev/null 2>&1 <<<"$ws_list_json"; then
+        trio_herdr_ws_id="$(jq -r --arg lbl "$ws_label_lookup" '.result.workspaces[]? | select(.label == $lbl) | .workspace_id // empty' <<<"$ws_list_json" | head -n1)"
+    fi
+
+    [[ -n "$trio_herdr_ws_id" ]] || return 0
+
+    local panes_json="" pane_match="" pane_id="" pane_status=""
+    panes_json="$(herdr pane list --workspace "$trio_herdr_ws_id" 2>/dev/null || true)"
+    if [[ -n "$panes_json" ]] && jq -e '.result.panes' >/dev/null 2>&1 <<<"$panes_json"; then
+        pane_match="$(jq -c --arg pm_lbl "PM-${ticket_num}" --arg os_lbl "OS-${ticket_num}" '
+            [.result.panes[]? | select((.label == $pm_lbl or .label == $os_lbl) and ((.agent // "") != "" or (.agent_status // "") != ""))][0] // empty
+        ' <<<"$panes_json")"
+        if [[ -n "$pane_match" ]]; then
+            pane_id="$(jq -r '.pane_id // ""' <<<"$pane_match")"
+            pane_status="$(jq -r '.agent_status // ""' <<<"$pane_match")"
+            if [[ -n "$pane_id" ]]; then
+                trio_herdr_target="$pane_id"
+                if [[ -n "$pane_status" ]]; then
+                    trio_herdr_status="$pane_status"
+                    return 0
+                fi
+                agent_json="$(herdr agent get "$pane_id" 2>/dev/null || true)"
+                if [[ -n "$agent_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$agent_json"; then
+                    trio_herdr_status="$(jq -r --arg d "$default_status" '.result.agent.agent_status // $d' <<<"$agent_json")"
+                    return 0
+                fi
+            fi
+        fi
+    fi
+
+    if [[ -z "$agent_list_json" ]]; then
+        agent_list_json="$(herdr agent list 2>/dev/null || true)"
+    fi
+    if [[ -n "$agent_list_json" ]] && jq -e '.result.agents' >/dev/null 2>&1 <<<"$agent_list_json"; then
+        local ag_match
+        ag_match="$(jq -c --arg ws "$trio_herdr_ws_id" '
+            [.result.agents[]? | select(.workspace_id == $ws and ((.name // "") | test("^(wk|rv)-") | not))]
+            | (map(select((.terminal_title // "") | contains("PM-") or contains("OS-")))[0])
+              // .[0] // empty
+        ' <<<"$agent_list_json")"
+        if [[ -n "$ag_match" ]]; then
+            local ag_target
+            ag_target="$(jq -r '(if (.name // "") != "" then .name else (.pane_id // "") end)' <<<"$ag_match")"
+            [[ -n "$ag_target" ]] && trio_herdr_target="$ag_target"
+            trio_herdr_status="$(jq -r --arg d "$default_status" '.agent_status // $d' <<<"$ag_match")"
+        fi
+    fi
+}
