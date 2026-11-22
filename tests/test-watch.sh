@@ -561,4 +561,24 @@ comp_out="$(bash -c '
 grep -qx -- '--ticket' <<<"$comp_out" \
   || fallo "completion de pj-trio watch debe incluir --ticket, obtuve: $comp_out"
 
+# 11. Sin <proyecto>: mismo Home Repo que la ruta, y --ticket sigue filtrando.
+mkdir -p "$pj/sub"
+cat > "$pj/.trio/ravn-trio-21/status.json" <<'EOF'
+{
+  "ticket": "ravn-trio-21",
+  "estado": "hecho",
+  "paso": "merge",
+  "timestamp": "2026-11-17T09:30:00-06:00"
+}
+EOF
+out_cwd="$(cd "$pj/sub" && PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch --ticket ravn-trio-21 --timeout 5 --json)"
+jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == "ravn-trio-21"' <<<"$out_cwd" >/dev/null \
+  || fallo "watch sin <proyecto> y con --ticket no infirió el Home Repo: $out_cwd"
+rc=0
+err="$(cd "$tmp" && PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch --timeout 1 --json 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fallo "watch fuera de un Home Repo debía fallar"
+grep -q '<proyecto>' <<<"$err" || fallo "watch fuera de un Home Repo debía pedir <proyecto>: $err"
+"$aqui/pj-trio" watch --help | grep -q 'Si se omite' \
+  || fallo "pj-trio watch --help debe decir que <proyecto> se puede omitir"
+
 echo "OK watch"

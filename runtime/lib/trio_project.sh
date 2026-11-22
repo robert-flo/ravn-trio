@@ -39,12 +39,18 @@ trio_nombre_repo() {
     printf '%s\n' "$base"
 }
 
+# Valor de `proyecto:` en proyecto.yml (vacío si no está).
+trio_campo_proyecto() {
+    local p=""
+    [[ -f "$1/proyecto.yml" ]] || return 0
+    p="$(sed -nE 's/^proyecto:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$1/proyecto.yml" | head -n1)"
+    printf '%s\n' "$p"
+}
+
 # Nombre del proyecto: `proyecto:` de proyecto.yml, si no el del remoto.
 trio_nombre_proyecto() {
     local p=""
-    if [[ -f "$1/proyecto.yml" ]]; then
-        p="$(sed -nE 's/^proyecto:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$1/proyecto.yml" | head -n1)"
-    fi
+    p="$(trio_campo_proyecto "$1")"
     [[ -n "$p" ]] || p="$(trio_nombre_repo "$1")"
     printf '%s\n' "$p"
 }
@@ -198,6 +204,64 @@ _trio_clonar_proyecto() {
     proyecto_arg="${slug#*/}"
     _trio_buscar_proyecto
     [[ -n "$project_dir" ]]
+}
+
+# Home Repo que contiene el directorio (default $PWD): el ancestro más cercano
+# con proyecto.yml y/o .trio/ que calza como Home Repo (nombre HR-* o pj-*,
+# o `proyecto:` en proyecto.yml). Si el nombre HR-*/pj-* no coincide con
+# `proyecto:`, es ambiguo.
+# Imprime la ruta absoluta. Retorno 0 si hay uno, 1 si no hay, 2 si es ambiguo.
+trio_inferir_home_repo() {
+    local dir="${1:-$PWD}" proyecto nombre tiene por_nombre por_yml
+    [[ -d "$dir" ]] || return 1
+    dir="$(cd "$dir" && pwd)"
+    while true; do
+        tiene=0
+        [[ -f "$dir/proyecto.yml" || -d "$dir/.trio" ]] && tiene=1
+        if (( tiene )); then
+            nombre="$(basename "$dir")"
+            proyecto="$(trio_campo_proyecto "$dir")"
+            por_nombre=0
+            por_yml=0
+            [[ "$nombre" == HR-* || "$nombre" == pj-* ]] && por_nombre=1
+            [[ -n "$proyecto" ]] && por_yml=1
+            if (( por_nombre && por_yml )) && [[ "$nombre" != "$proyecto" ]]; then
+                return 2
+            fi
+            if (( por_nombre || por_yml )); then
+                printf '%s\n' "$dir"
+                return 0
+            fi
+        fi
+        [[ "$dir" == "/" ]] && break
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
+# Si hay un argumento, es <proyecto>. Si no hay, infiere el Home Repo del cwd.
+# Más de uno es error. Deja el resultado en proyecto_arg.
+trio_proyecto_desde_args() {
+    if (( $# > 1 )); then
+        print_error "se requiere un solo <proyecto>." >&2
+        return 1
+    fi
+    if (( $# == 1 )); then
+        proyecto_arg="$1"
+        return 0
+    fi
+    local rc=0 dir=""
+    dir="$(trio_inferir_home_repo "$PWD")" || rc=$?
+    if (( rc == 0 )); then
+        proyecto_arg="$dir"
+        return 0
+    fi
+    if (( rc == 2 )); then
+        print_error "el Home Repo del directorio es ambiguo; se requiere <proyecto>." >&2
+    else
+        print_error "no hay Home Repo en este directorio; se requiere <proyecto>." >&2
+    fi
+    return 1
 }
 
 trio_resolver_proyecto() {

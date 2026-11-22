@@ -16,10 +16,14 @@ source "$PROJECT_DIR/lib/trio_project.sh"
 show_watch_help() {
   print_section "Watch Usage"
   cat <<'HELP_EOF'
-  Uso: pj-trio watch <proyecto> [--ticket <clave[,clave...]>] [--snapshot <archivo>] [--timeout <seg>] [--verbose] [--json]
+  Uso: pj-trio watch [<proyecto>] [--ticket <clave[,clave...]>] [--snapshot <archivo>] [--timeout <seg>] [--verbose] [--json]
 
   Argumentos:
     <proyecto>            Ruta o nombre del proyecto meta (pj-* / HR-*).
+                          Si se omite, se usa el Home Repo del directorio actual
+                          o de un ancestro (proyecto.yml y/o .trio/, nombre HR-* /
+                          pj-* o `proyecto:` en proyecto.yml). Si no hay o es
+                          ambiguo, falla pidiendo <proyecto>.
 
   Opciones:
     --ticket <clave>      Filtra por clave o número de ticket (repetible o separado por comas).
@@ -103,13 +107,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ${#positional[@]} -ne 1 ]]; then
-  print_error "se requiere <proyecto>." >&2
+if ! trio_proyecto_desde_args "${positional[@]}"; then
   show_watch_help >&2
   exit 1
 fi
-
-proyecto_arg="${positional[0]}"
 repo_arg=""
 ticket=""
 export PJ_TRIO_NO_CLONE="${PJ_TRIO_NO_CLONE:-1}"

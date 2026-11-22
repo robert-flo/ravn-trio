@@ -16,10 +16,14 @@ source "$PROJECT_DIR/lib/trio_project.sh"
 show_fleet_help() {
   print_section "Fleet Status Usage"
   cat <<'HELP_EOF'
-  Uso: pj-trio fleet <proyecto> [--activos] [--json]
+  Uso: pj-trio fleet [<proyecto>] [--activos] [--json]
 
   Argumentos:
     <proyecto>    Ruta o nombre del proyecto meta (pj-* / HR-*).
+                  Si se omite, se usa el Home Repo del directorio actual o de
+                  un ancestro (proyecto.yml y/o .trio/, nombre HR-* / pj-* o
+                  `proyecto:` en proyecto.yml). Si no hay o es ambiguo, falla
+                  pidiendo <proyecto>.
 
   Opciones:
     --activos     Muestra solo tríos con estado en-curso, needs-roberto o workspace abierto.
@@ -62,13 +66,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ${#positional[@]} -ne 1 ]]; then
-  print_error "se requiere <proyecto>." >&2
+if ! trio_proyecto_desde_args "${positional[@]}"; then
   show_fleet_help >&2
   exit 1
 fi
-
-proyecto_arg="${positional[0]}"
 repo_arg=""
 ticket=""
 export PJ_TRIO_NO_CLONE="${PJ_TRIO_NO_CLONE:-1}"
