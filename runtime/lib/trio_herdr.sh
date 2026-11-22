@@ -298,8 +298,25 @@ iniciar_agente_rol() {
     trio_construir_args_agente "$role" "$kind" "$archivo_kickoff"
     kickoff_target="$trio_kickoff_inline"
 
-    local start_output
-    if ! start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${trio_agent_args[@]}" 2>&1)"; then
+    # Margen breve para que el shell del pane recién creado termine de tomar el PTY.
+    if [[ "${TRIO_PANE_SETTLE_SECS:-0.3}" != "0" ]]; then
+        sleep "${TRIO_PANE_SETTLE_SECS:-0.3}"
+    fi
+
+    local start_output="" start_ok=0 intento
+    for intento in 1 2; do
+        if start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${trio_agent_args[@]}" 2>&1)"; then
+            start_ok=1
+            break
+        fi
+        if [[ "$intento" -eq 1 ]] && echo "$start_output" | grep -qi "no longer owns the target terminal"; then
+            sleep "${TRIO_START_RETRY_SECS:-1}"
+            continue
+        fi
+        break
+    done
+
+    if [[ "$start_ok" -eq 0 ]]; then
         # Si el agente requiere interacción o confirmación inicial (ej. prompts de bienvenida o permisos),
         # herdr reporta agent_not_ready. El proceso queda corriendo en el panel.
         # agent_not_ready y timeout (herdr src/cli/agent.rs:722-727, tras escribir ya el
@@ -309,12 +326,16 @@ iniciar_agente_rol() {
             if [[ "$kickoff_target" -eq 1 ]]; then kickoff_en_arranque=1; fi
         else
             if [[ "$role" == PM || "$role" == OS ]]; then pm_fallo_inicio=1; fi
-            local err_msg
+            local err_msg pane_tail
             err_msg="$(echo "$start_output" | jq -r '.error.message // empty' 2>/dev/null || true)"
             if [[ -n "$err_msg" ]]; then
                 print_warn "no se pudo iniciar automáticamente el agente para ${role}: ${err_msg}" >&2
             else
                 print_warn "no se pudo iniciar automáticamente el agente para ${role}: ${start_output}" >&2
+            fi
+            pane_tail="$(herdr pane read "$pane_id" 2>/dev/null | tail -n 20 || true)"
+            if [[ -n "$pane_tail" ]]; then
+                print_warn "Última salida del pane ${pane_id}:"$'\n'"${pane_tail}" >&2
             fi
             if [[ "$role" == PM || "$role" == OS ]]; then
                 print_error "el ${role} no arrancó; no se envía el arranque ni se marca status.json." >&2

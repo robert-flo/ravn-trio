@@ -27,7 +27,7 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
    Si la rama ya existe, usá otro slug. Anotá la ruta del worktree y la base en plan.md.
 3. Mandale el trabajo a WK vos mismo:
    `herdr agent prompt {{AGENTE_WK}} "{{WK_RULE_PREFIX}}Sos WK del ticket #{{TICKET}}. Leé {{TRIO_DIR}}/plan.md, trabajá SOLO en el worktree <ruta>, abrí el PR contra {{BASE_PR}} con: gh pr create -R {{PR_REPO}}{{GH_PR_BASE}} (más título, body{{WK_ISSUE_REF}} y --draft según tus reglas), y escribí {{TRIO_DIR}}/wk.md con PR, head sha y pruebas.{{WK_MERGE}}"`
-   Esperá con `herdr agent wait {{AGENTE_WK}} --timeout 600000` y confirmá con `herdr agent read {{AGENTE_WK}}` y que exista wk.md (idle sin wk.md NO es terminado). Si falla, aplicá la sección Fallos.
+   Esperá con `herdr agent wait {{AGENTE_WK}} --timeout 600000` y confirmá con `herdr agent read {{AGENTE_WK}}` y que exista wk.md (si devuelve `idle` sin wk.md, verificá actividad antes de contarlo como fallo). Si falla, aplicá la sección Fallos.
 {{NOTA_SUBISSUE}}
 4. (Trivial o PR final) Mandale la revisión a RV vos mismo:
    `herdr agent prompt {{AGENTE_RV}} "{{RV_RULE_PREFIX}}Sos RV del ticket #{{TICKET}}. Revisá el PR <url> en head <sha> contra el ticket {{ISSUE_REPO}}#{{TICKET}} y {{TRIO_DIR}}/plan.md. Escribí {{TRIO_DIR}}/rv.md y comentá en el PR terminando en APRUEBO <sha> o BLOQUEO con motivos."`
@@ -53,7 +53,10 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
    - Como último comando absoluto (después del commit + push y `worktree remove`), resolvé el `workspace_id` de `{{WORKSPACE_NOMBRE}}` vía `herdr workspace list` y ejecutá `herdr workspace close <workspace_id>`.
 
 ## Fallos: un reintento y aviso
-Un paso falló si: `herdr agent wait` da error o vence, el estado del agente (`herdr agent get <agente>`) es blocked, agent_prompt_stalled o unknown, el agente no aparece en `herdr agent list`, o queda idle sin su archivo de entrega (wk.md / rv.md). También cuenta un comando tuyo (push, gh) que falla.
+Si `herdr agent wait` devuelve `idle` sin que exista `wk.md` / `rv.md` (por ejemplo, por subagentes en segundo plano como `Spec Code Reviewer` o `code-review`), **antes** de contarlo como fallo y escalar a `needs-roberto`:
+- Verificá actividad reciente con `herdr agent read <agente>` y `gh pr list -R {{PR_REPO}}`.
+- Si hay actividad o subagentes en curso, volvé a esperar con `herdr agent wait <agente> --timeout 600000` (hasta 2 esperas adicionales).
+Un paso falló si: `herdr agent wait` da error o vence, el estado del agente (`herdr agent get <agente>`) es blocked, agent_prompt_stalled o unknown, el agente no aparece en `herdr agent list`, o sigue idle sin actividad ni archivo de entrega (wk.md / rv.md) tras verificar. También cuenta un comando tuyo (push, gh) que falla.
 1. Primer fallo: `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso <paso> --intentos 2 --error "<motivo>"` y reintentá el paso UNA vez (mismo prompt; si el agente no aparece, Roberto lo relanza con pj-trio, así que esperá y volvé a mirar `herdr agent list` antes de reenviar).
 2. Segundo fallo del mismo paso: NO reintentes más. Ejecutá
    `{{TRIO_STATUS}} --notify --cola-de <agente> {{TRIO_DIR}} needs-roberto <paso> --intentos 2 --error "<motivo>"`
