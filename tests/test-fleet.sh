@@ -153,4 +153,47 @@ git init -q "$pj_vacio"
 json_vacio="$(PATH="$tmp/bin_noherdr" "$aqui/pj-trio" fleet "$pj_vacio" --json)"
 jq -e '. == []' <<<"$json_vacio" >/dev/null || fallo "proyecto vacío debía devolver []: $json_vacio"
 
+# 6. Sin <proyecto>: el Home Repo sale del cwd (o de un ancestro).
+json_cwd="$(cd "$pj" && PATH="$tmp/bin_herdr:$PATH" "$aqui/pj-trio" fleet --json)"
+[[ "$json_cwd" == "$json_all" ]] || fallo "fleet sin args en el Home Repo debía igualar a la ruta: $json_cwd"
+json_sub="$(cd "$pj/.trio/ravn-trio-11" && PATH="$tmp/bin_herdr:$PATH" "$aqui/pj-trio" fleet --activos --json)"
+[[ "$json_sub" == "$json_act" ]] || fallo "fleet --activos desde un subdirectorio debía igualar al argumento: $json_sub"
+# .trio/ sin proyecto.yml también calza si el directorio es HR-* o pj-*.
+pj_solo_trio="$tmp/HR-SOLO-TRIO"
+git init -q "$pj_solo_trio"
+mkdir -p "$pj_solo_trio/.trio"
+json_solo="$(cd "$pj_solo_trio" && PATH="$tmp/bin_noherdr" "$aqui/pj-trio" fleet --json)"
+jq -e '. == []' <<<"$json_solo" >/dev/null || fallo "HR-* con solo .trio/ debía resolver: $json_solo"
+
+# 7. Fuera de un Home Repo, o ambiguo, pide <proyecto>.
+rc=0
+err="$(cd "$tmp" && PATH="$tmp/bin_noherdr" "$aqui/pj-trio" fleet --json 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fallo "fuera de un Home Repo fleet debía fallar"
+grep -q '<proyecto>' <<<"$err" || fallo "el error debía pedir <proyecto>: $err"
+pj_amb="$tmp/HR-UNO"
+mkdir -p "$pj_amb"
+printf 'proyecto: "HR-DOS"\n' > "$pj_amb/proyecto.yml"
+rc=0
+err="$(cd "$pj_amb" && PATH="$tmp/bin_noherdr" "$aqui/pj-trio" fleet 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fallo "nombre HR-* distinto de proyecto: debía ser ambiguo"
+grep -q '<proyecto>' <<<"$err" || fallo "el ambiguo debía pedir <proyecto>: $err"
+
+# 8. Con argumento, el cwd no importa.
+json_explicito="$(cd / && PATH="$tmp/bin_noherdr" "$aqui/pj-trio" fleet "$pj" --json)"
+[[ "$json_explicito" == "$json_noherdr" ]] || fallo "con <proyecto> el cwd no debía cambiar el resultado"
+
+# 9. Ayuda y completion: <proyecto> opcional y nombres HR-*/pj-*.
+"$aqui/pj-trio" fleet --help | grep -q 'Si se omite' \
+  || fallo "pj-trio fleet --help debe decir que <proyecto> se puede omitir"
+comp_out="$(PJ_TRIO_ROOTS="$tmp" bash -c '
+  source "'"$aqui"'/runtime/completion/pj-trio.bash"
+  COMP_WORDS=(pj-trio fleet "")
+  COMP_CWORD=2
+  _pj_trio_completion
+  printf "%s\n" "${COMPREPLY[@]}"
+')"
+grep -qx -- '--activos' <<<"$comp_out" || fallo "completion de fleet debe incluir --activos: $comp_out"
+grep -qx -- '--json' <<<"$comp_out" || fallo "completion de fleet debe incluir --json: $comp_out"
+grep -qx -- 'HR-DEMO' <<<"$comp_out" || fallo "completion de fleet debe incluir HR-DEMO: $comp_out"
+
 echo "OK fleet"
