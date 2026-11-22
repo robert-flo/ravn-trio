@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+
+# Close command module: cierra y elimina la sesión persistente herdr de un spec
+# tras verificar que el PR final está mergeado y el estado no es needs-roberto.
+# shellcheck disable=SC2034,SC2154 # Globals are shared with runtime/lib/trio_project.sh.
+set -Eeuo pipefail
+
+module_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091 # Resolved from the project root.
+source "$module_dir/../helper/set_variable.sh"
+PROJECT_DIR="$TRIO_RUNTIME_DIR"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/presentation.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/trio_project.sh"
+
+show_close_help() {
+  print_section "Close Spec Session Usage"
+  cat <<'HELP_EOF'
+  Uso: pj-trio close [<proyecto>] <ticket> [--repo <miembro>] [--dry-run]
+
+  Argumentos:
+    <proyecto>        Ruta o nombre del proyecto meta (pj-* / HR-*).
+                      Si se omite, se infiere el Home Repo del directorio actual.
+    <ticket>          Número o clave del spec (ej. 123 o ravn-trio-123).
+
+  Opciones:
+    --repo <miembro>  Repositorio miembro del proyecto (para resolver <miembro>-<ticket>).
+    --dry-run         Muestra los comandos sin ejecutarlos.
+    -h, --help        Muestra esta ayuda.
+HELP_EOF
+}
+
+dry_run=0
+repo_arg=""
+positional=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    --repo)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        print_error "--repo requiere un argumento." >&2
+        exit 1
+      fi
+      repo_arg="$2"
+      shift 2
+      ;;
+    --repo=*)
+      repo_arg="${1#*=}"
+      shift
+      ;;
+    -h|--help)
+      show_close_help
+      exit 0
+      ;;
+    --)
+      shift
+      positional+=("$@")
+      break
+      ;;
+    -*)
+      print_error "opción desconocida: $1" >&2
+      exit 1
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ ${#positional[@]} -eq 2 ]]; then
+  proyecto_arg="${positional[0]}"
+  ticket="${positional[1]}"
+elif [[ ${#positional[@]} -eq 1 ]]; then
+  ticket="${positional[0]}"
+  if ! trio_proyecto_desde_args; then
+    show_close_help >&2
+    exit 1
+  fi
+else
+  print_error "se requieren [<proyecto>] <ticket>." >&2
+  show_close_help >&2
+  exit 1
+fi
+
+export PJ_TRIO_NO_CLONE="${PJ_TRIO_NO_CLONE:-1}"
+trio_resolver_proyecto
+trio_nombres
+
+status_file="${trio_dir}/status.json"
+if [[ ! -f "$status_file" && -z "$repo_arg" ]]; then
+  shopt -s nullglob
+  candidatos=("$project_dir/.trio"/*-"$ticket"/status.json)
+  shopt -u nullglob
+  if [[ ${#candidatos[@]} -eq 1 ]]; then
+    status_file="${candidatos[0]}"
+    trio_dir="$(dirname "$status_file")"
+    ticket_key="$(basename "$trio_dir")"
+  elif [[ ${#candidatos[@]} -gt 1 ]]; then
+    print_error "múltiples handoffs coinciden con '$ticket'; pasá la clave completa o --repo." >&2
+    exit 1
+  fi
+fi
+
+if [[ ! -f "$status_file" ]]; then
+  print_error "no existe ${status_file}." >&2
+  exit 1
+fi
+
+if ! raw_status="$(jq -e '.' "$status_file" 2>/dev/null)"; then
+  print_error "status.json inválido en ${status_file}." >&2
+  exit 1
+fi
+
+estado="$(jq -r '.estado // ""' <<<"$raw_status")"
+session="$(jq -r '.session // ""' <<<"$raw_status")"
+pr_url="$(jq -r '.pr // ""' <<<"$raw_status")"
+
+if [[ "$estado" == "needs-roberto" ]]; then
+  print_error "el spec ${ticket_key} está en estado 'needs-roberto'; se conserva la sesión '${session:-<ninguna>}' viva." >&2
+  exit 1
+fi
+
+if [[ -z "$session" ]]; then
+  print_error "el spec ${ticket_key} no tiene sesión herdr registrada en ${status_file}." >&2
+  exit 1
+fi
+
+if [[ -z "$pr_url" ]]; then
+  print_error "el spec ${ticket_key} no tiene PR registrado en ${status_file}; se conserva la sesión '${session}' viva." >&2
+  exit 1
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  print_error "el comando 'gh' no está disponible para verificar el PR ${pr_url}." >&2
+  exit 1
+fi
+
+pr_json=""
+if ! pr_json="$(gh pr view "$pr_url" --json state,mergedAt 2>&1)"; then
+  print_error "no se pudo consultar el PR ${pr_url} en GitHub: ${pr_json%%$'\n'*}" >&2
+  print_info "Se conserva la sesión '${session}' viva." >&2
+  exit 1
+fi
+
+pr_state="$(jq -r '.state // ""' <<<"$pr_json" 2>/dev/null || true)"
+pr_merged_at="$(jq -r '.mergedAt // ""' <<<"$pr_json" 2>/dev/null || true)"
+
+if [[ "$pr_state" != "MERGED" || -z "$pr_merged_at" || "$pr_merged_at" == "null" ]]; then
+  print_error "el PR ${pr_url} está en estado '${pr_state:-desconocido}' (sin merge); se conserva la sesión '${session}' viva." >&2
+  exit 1
+fi
+
+if [[ "$dry_run" -eq 1 ]]; then
+  echo "[dry-run] herdr session stop \"$session\""
+  echo "[dry-run] herdr session delete \"$session\""
+  exit 0
+fi
+
+if ! command -v herdr >/dev/null 2>&1; then
+  print_error "el comando 'herdr' no está disponible en el PATH." >&2
+  exit 1
+fi
+
+session_running=""
+sessions_json="$(herdr session list --json 2>/dev/null || true)"
+if [[ -n "$sessions_json" ]] && jq -e '.sessions' >/dev/null 2>&1 <<<"$sessions_json"; then
+  session_running="$(jq -r --arg s "$session" '.sessions[]? | select(.name == $s) | .running // false' <<<"$sessions_json" | head -n1)"
+fi
+
+if [[ "$session_running" != "false" ]]; then
+  if ! stop_out="$(herdr session stop "$session" 2>&1)"; then
+    print_error "no se pudo detener la sesión '${session}': ${stop_out}" >&2
+    exit 1
+  fi
+fi
+
+if ! del_out="$(herdr session delete "$session" 2>&1)"; then
+  print_error "no se pudo eliminar la sesión '${session}': ${del_out}" >&2
+  exit 1
+fi
+
+print_info "Sesión herdr '${session}' detenida y eliminada (PR ${pr_url} mergeado, estado ${estado})."

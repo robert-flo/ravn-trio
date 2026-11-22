@@ -50,7 +50,7 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
    - Actualizá `status.json` y notificá: `{{TRIO_STATUS}} --notify {{TRIO_DIR}} hecho cierre --pr <url> --head <sha> --merge-sha <merge_sha> --merge-danger "two-way / Low"` (en un sub-issue `--base`, omití `--merge-danger` si no hubo Merge Danger).
    - Commit + push del meta-repo y `git -C {{WT_RAIZ}} worktree remove <ruta>`.
    - Avisale a Roberto con: link del PR, link del comentario del APRUEBO, sha del merge (`gh pr view <pr> -R {{PR_REPO}} --json mergeCommit -q .mergeCommit.oid`) y los pasos de validación manual (ADR 0014 de pj-template).
-   - Como último comando absoluto (después del commit + push y `worktree remove`), resolvé el `workspace_id` de `{{WORKSPACE_NOMBRE}}` vía `herdr workspace list` y ejecutá `herdr workspace close <workspace_id>`.
+   - Como último comando absoluto (después del commit + push y `worktree remove`), resolvé el `workspace_id` de `{{WORKSPACE_NOMBRE}}` vía `herdr workspace list` y ejecutá únicamente `herdr workspace close <workspace_id>` (sin detener ni eliminar la sesión `herdr` del spec; eso lo controla el PM Orquestador).
 
 ## Fallos: un reintento y aviso
 Si `herdr agent wait` devuelve `idle` sin que exista `wk.md` / `rv.md` (por ejemplo, por subagentes en segundo plano como `Spec Code Reviewer` o `code-review`), **antes** de contarlo como fallo y escalar a `needs-roberto`:
