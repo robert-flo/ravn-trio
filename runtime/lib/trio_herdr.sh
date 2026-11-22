@@ -303,17 +303,18 @@ iniciar_agente_rol() {
         sleep "${TRIO_PANE_SETTLE_SECS:-0.3}"
     fi
 
-    local start_output start_ok=1
-    if ! start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${trio_agent_args[@]}" 2>&1)"; then
-        if echo "$start_output" | grep -qi "no longer owns the target terminal"; then
-            sleep "${TRIO_START_RETRY_SECS:-1}"
-            if ! start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${trio_agent_args[@]}" 2>&1)"; then
-                start_ok=0
-            fi
-        else
-            start_ok=0
+    local start_output="" start_ok=0 intento
+    for intento in 1 2; do
+        if start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${trio_agent_args[@]}" 2>&1)"; then
+            start_ok=1
+            break
         fi
-    fi
+        if [[ "$intento" -eq 1 ]] && echo "$start_output" | grep -qi "no longer owns the target terminal"; then
+            sleep "${TRIO_START_RETRY_SECS:-1}"
+            continue
+        fi
+        break
+    done
 
     if [[ "$start_ok" -eq 0 ]]; then
         # Si el agente requiere interacción o confirmación inicial (ej. prompts de bienvenida o permisos),
