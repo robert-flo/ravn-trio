@@ -27,7 +27,10 @@ fi
 if grep -q 'agent start "pm-' <<<"$out" || grep -q 'agent start "wk-' <<<"$out" || grep -q 'agent start "rv-' <<<"$out"; then
     fallo "oneshot inició agentes pm/wk/rv"
 fi
-grep -q -- '-i "Lee y segui al pie de la letra las instrucciones de arranque del archivo ' <<<"$out" || fallo "arranque vía agy -i para OS"
+if grep -q -- 'herdr agent start "os-miembro-42".* -i ' <<<"$out"; then
+    fallo "OS con agy no debe llevar -i al arrancar"
+fi
+grep -q 'herdr agent prompt "os-miembro-42" "Lee y segui al pie de la letra las instrucciones de arranque del archivo ' <<<"$out" || fallo "arranque vía herdr agent prompt para OS"
 
 # 2. --print-kickoff con --oneshot
 k="$("$aqui/pj-trio" --print-kickoff "$tmp/pj-demo" 42 --repo "$tmp/miembro" --oneshot)"

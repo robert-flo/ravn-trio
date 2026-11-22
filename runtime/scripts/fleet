@@ -91,11 +91,14 @@ fi
 
 # Consultar herdr workspace list una sola vez si está disponible
 herdr_ok=0
+ws_json=""
+agent_list_cache=""
 declare -A ws_by_label=()
 if command -v herdr >/dev/null 2>&1; then
   ws_json="$(herdr workspace list 2>/dev/null || true)"
   if [[ -n "$ws_json" ]] && jq -e '.result.workspaces' >/dev/null 2>&1 <<<"$ws_json"; then
     herdr_ok=1
+    agent_list_cache="$(herdr agent list 2>/dev/null || true)"
     while IFS=$'\t' read -r w_label w_id; do
       [[ -n "$w_label" ]] && ws_by_label["$w_label"]="$w_id"
     done < <(jq -r '.result.workspaces[]? | [(.label // ""), (.workspace_id // "")] | @tsv' <<<"$ws_json")
@@ -126,25 +129,10 @@ for status_file in "${status_files[@]}"; do
   workspace_id=""
   pm_herdr_status="unavailable"
   if [[ "$herdr_ok" -eq 1 ]]; then
-    workspace_id="${ws_by_label[$ws_label_lookup]:-}"
-    agent_json="$(herdr agent get "$pm_agent" 2>/dev/null || true)"
-    if [[ -n "$agent_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$agent_json"; then
-      pm_herdr_status="$(jq -r '.result.agent.agent_status // "cerrado"' <<<"$agent_json")"
-      if [[ -z "$workspace_id" ]]; then
-        workspace_id="$(jq -r '.result.agent.workspace_id // ""' <<<"$agent_json")"
-      fi
-    else
-      os_agent="$(nombre_agente os)"
-      os_json="$(herdr agent get "$os_agent" 2>/dev/null || true)"
-      if [[ -n "$os_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$os_json"; then
-        pm_herdr_status="$(jq -r '.result.agent.agent_status // "cerrado"' <<<"$os_json")"
-        if [[ -z "$workspace_id" ]]; then
-          workspace_id="$(jq -r '.result.agent.workspace_id // ""' <<<"$os_json")"
-        fi
-      else
-        pm_herdr_status="cerrado"
-      fi
-    fi
+    os_agent="$(nombre_agente os)"
+    trio_resolver_agente_herdr "$pm_agent" "$os_agent" "$ws_label_lookup" "$ticket" "cerrado" "$ws_json" "$agent_list_cache"
+    pm_herdr_status="$trio_herdr_status"
+    workspace_id="${ws_by_label[$ws_label_lookup]:-${trio_herdr_ws_id:-}}"
   fi
 
   estado="$(jq -r '.estado // ""' <<<"$raw_status")"

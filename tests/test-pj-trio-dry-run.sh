@@ -15,7 +15,10 @@ fallo() { echo "FALLO: $*" >&2; exit 1; }
 
 out="$("$aqui/pj-trio" --dry-run "$tmp/pj-demo" 42 --repo "$tmp/miembro" 2>&1)"
 grep -q 'herdr agent start "pm-miembro-42"' <<<"$out" || fallo "nombre de agente por proyecto y ticket"
-grep -q -- '-i "Lee y segui al pie de la letra las instrucciones de arranque del archivo ' <<<"$out" || fallo "arranque vía agy -i"
+if grep -q -- 'herdr agent start "pm-miembro-42".* -i ' <<<"$out"; then
+    fallo "PM con agy no debe llevar -i al arrancar"
+fi
+grep -q 'herdr agent prompt "pm-miembro-42" "Lee y segui al pie de la letra las instrucciones de arranque del archivo ' <<<"$out" || fallo "arranque vía herdr agent prompt"
 out43="$("$aqui/pj-trio" --dry-run "$tmp/pj-demo" 43 --repo "$tmp/miembro" 2>&1)"
 grep -q 'herdr agent start "pm-miembro-43"' <<<"$out43" || fallo "otro ticket del mismo proyecto usa otro nombre"
 grep -q "config user.email \"25asab015@ujmd.edu.sv\"" <<<"$out" || fallo "identidad git"
@@ -32,7 +35,7 @@ grep -qi 'worktree add' <<<"$k" || fallo "worktree nuevo"
 # Idempotencia del arranque: con status.json presente no se reenvía.
 mkdir -p "$tmp/pj-demo/.trio/42" && echo '{}' > "$tmp/pj-demo/.trio/42/status.json"
 out="$("$aqui/pj-trio" --dry-run "$tmp/pj-demo" 42 2>&1)"
-grep -q 'se conserva' <<<"$out" || fallo "PM nuevo recibe arranque sin pisar status.json"
+grep -qE 'no se reenvía|se conserva' <<<"$out" || fallo "con status.json presente no debía reenviar"
 
 grep -q 'needs-roberto' <<<"$k" || fallo "regla de fallo definitivo"
 grep -q -- '--notify' <<<"$k" || fallo "aviso notify-send"
