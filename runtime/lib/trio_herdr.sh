@@ -3,6 +3,34 @@
 # Operaciones sobre herdr, agy y git que usa el módulo start.
 # shellcheck disable=SC2034,SC2154 # Globals are shared by runtime/scripts/start before these functions run.
 
+# Ejecuta herdr apuntando a la sesión persistente del spec si está definida.
+trio_herdr() {
+    if [[ -n "${herdr_session:-}" ]]; then
+        herdr --session "$herdr_session" "$@"
+    else
+        herdr "$@"
+    fi
+}
+
+# Crea o reutiliza el servidor de la sesión persistente del spec en herdr.
+trio_asegurar_sesion_herdr() {
+    [[ -n "${herdr_session:-}" ]] || return 0
+    if herdr --session "$herdr_session" workspace list >/dev/null 2>&1; then
+        return 0
+    fi
+    nohup herdr --session "$herdr_session" server >/dev/null 2>&1 &
+    local intento=0 max_intentos="${TRIO_SESSION_WAIT_RETRIES:-50}"
+    while (( intento < max_intentos )); do
+        if herdr --session "$herdr_session" workspace list >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep "${TRIO_SESSION_WAIT_INTERVAL:-0.1}"
+        intento=$((intento + 1))
+    done
+    print_error "no se pudo iniciar la sesión persistente de herdr '$herdr_session'." >&2
+    exit 1
+}
+
 # Identidad git: la fija pj-trio en la config local de cada repo (idempotente).
 fijar_identidad_git() {
     if [[ -z "$TRIO_GIT_NAME" || -z "$TRIO_GIT_EMAIL" ]]; then
@@ -45,15 +73,18 @@ enviar_kickoff() {
         print_warn "${target_agent} ya corre en otro pane; no envío el arranque ni escribo status.json." >&2
         return 0
     fi
+    local -a status_session_args=()
+    [[ -n "${herdr_session:-}" ]] && status_session_args=(--session "$herdr_session")
+
     if [[ "${kickoff_en_arranque:-0}" -eq 1 ]]; then
         # cursor ya recibió el arranque al iniciar.
         echo "Arranque enviado a ${target_agent} al iniciar ${target_kind} (sesión interactiva)."
         if [[ -f "${trio_dir}/status.json" ]]; then
             echo "status.json ya existía; se conserva (el agente retoma desde ahí)."
         elif [[ "$dry_run" -eq 1 ]]; then
-            "$trio_status" --dry-run "$trio_dir" en-curso plan
+            "$trio_status" --dry-run "${status_session_args[@]}" "$trio_dir" en-curso plan
         else
-            "$trio_status" "$trio_dir" en-curso plan
+            "$trio_status" "${status_session_args[@]}" "$trio_dir" en-curso plan
         fi
         return 0
     fi
@@ -65,8 +96,12 @@ enviar_kickoff() {
     local texto="Lee y segui al pie de la letra las instrucciones de arranque del archivo ${kickoff_file}"
     if [[ "$dry_run" -eq 1 ]]; then
         echo "[dry-run] mkdir -p \"$trio_dir\""
-        echo "[dry-run] herdr agent prompt \"$target_agent\" \"$texto\""
-        "$trio_status" --dry-run "$trio_dir" en-curso plan
+        if [[ -n "${herdr_session:-}" ]]; then
+            echo "[dry-run] herdr --session \"$herdr_session\" agent prompt \"$target_agent\" \"$texto\""
+        else
+            echo "[dry-run] herdr agent prompt \"$target_agent\" \"$texto\""
+        fi
+        "$trio_status" --dry-run "${status_session_args[@]}" "$trio_dir" en-curso plan
         return 0
     fi
     if [[ ! -f "$kickoff_file" ]]; then
@@ -79,11 +114,11 @@ enviar_kickoff() {
         return 0
     fi
     local prompt_target="$target_agent"
-    if [[ -n "$target_pane" ]] && ! herdr agent get "$target_agent" >/dev/null 2>&1; then
+    if [[ -n "$target_pane" ]] && ! trio_herdr agent get "$target_agent" >/dev/null 2>&1; then
         prompt_target="$target_pane"
     fi
     local out
-    if ! out="$(herdr agent prompt "$prompt_target" "$texto" 2>&1)"; then
+    if ! out="$(trio_herdr agent prompt "$prompt_target" "$texto" 2>&1)"; then
         print_warn "no se pudo enviar el arranque a ${target_agent}: ${out}" >&2
         print_info "Pegalo a mano: pj-trio --print-kickoff ${project_name} ${ticket}${repo_arg:+ --repo $repo_arg}${ticket_repo_arg:+ --ticket-repo $ticket_repo_arg}" >&2
         return 0
@@ -91,7 +126,7 @@ enviar_kickoff() {
     if [[ -f "${trio_dir}/status.json" ]]; then
         echo "status.json ya existía; se conserva (el agente retoma desde ahí)."
     else
-        "$trio_status" "$trio_dir" en-curso plan
+        "$trio_status" "${status_session_args[@]}" "$trio_dir" en-curso plan
     fi
 }
 
@@ -199,10 +234,14 @@ instalar_integraciones() {
     if [[ "$dry_run" -eq 1 ]]; then
         if command -v herdr >/dev/null 2>&1; then
             local status_out
-            status_out="$(herdr integration status 2>/dev/null || true)"
+            status_out="$(trio_herdr integration status 2>/dev/null || true)"
             for target in "${kinds[@]}"; do
                 if echo "$status_out" | grep -E "^${target}:" | grep -q "not installed"; then
-                    echo "[dry-run] herdr integration install \"$target\""
+                    if [[ -n "${herdr_session:-}" ]]; then
+                        echo "[dry-run] herdr --session \"$herdr_session\" integration install \"$target\""
+                    else
+                        echo "[dry-run] herdr integration install \"$target\""
+                    fi
                 fi
             done
         fi
@@ -214,11 +253,11 @@ instalar_integraciones() {
     fi
 
     local status_out
-    status_out="$(herdr integration status 2>/dev/null || true)"
+    status_out="$(trio_herdr integration status 2>/dev/null || true)"
     for target in "${kinds[@]}"; do
         if echo "$status_out" | grep -E "^${target}:" | grep -q "not installed"; then
             echo "Instalando integración para $target..."
-            if ! herdr integration install "$target"; then
+            if ! trio_herdr integration install "$target"; then
                 print_warn "no se pudo instalar la integración para $target" >&2
             fi
         fi
@@ -267,7 +306,7 @@ iniciar_agente_rol() {
     agent_name="$(nombre_agente "$role")"
 
     local live_agents
-    live_agents="$(herdr agent list 2>/dev/null || true)"
+    live_agents="$(trio_herdr agent list 2>/dev/null || true)"
     if echo "$live_agents" | jq -e --arg p "$pane_id" \
         '.result.agents[]? | select(.pane_id == $p)' >/dev/null 2>&1; then
         return 0
@@ -281,7 +320,7 @@ iniciar_agente_rol() {
     fi
 
     local pane_info
-    pane_info="$(herdr pane get "$pane_id" 2>/dev/null || true)"
+    pane_info="$(trio_herdr pane get "$pane_id" 2>/dev/null || true)"
     if echo "$pane_info" | jq -e '.result.pane.agent // empty | select(. != "")' >/dev/null 2>&1; then
         return 0
     fi
@@ -315,7 +354,7 @@ iniciar_agente_rol() {
 
     local start_output="" start_ok=0 intento
     for intento in 1 2; do
-        if start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${trio_agent_args[@]}" 2>&1)"; then
+        if start_output="$(trio_herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${trio_agent_args[@]}" 2>&1)"; then
             start_ok=1
             break
         fi
@@ -343,7 +382,7 @@ iniciar_agente_rol() {
             else
                 print_warn "no se pudo iniciar automáticamente el agente para ${role}: ${start_output}" >&2
             fi
-            pane_tail="$(herdr pane read "$pane_id" 2>/dev/null | tail -n 20 || true)"
+            pane_tail="$(trio_herdr pane read "$pane_id" 2>/dev/null | tail -n 20 || true)"
             if [[ -n "$pane_tail" ]]; then
                 print_warn "Última salida del pane ${pane_id}:"$'\n'"${pane_tail}" >&2
             fi

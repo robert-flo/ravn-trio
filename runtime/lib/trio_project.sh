@@ -378,6 +378,31 @@ sanear_nombre() {
     echo "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_\n-' '-'
 }
 
+# Deriva y sanea el nombre de sesión persistente de herdr para un spec (#<N> - <título corto>).
+# herdr --session solo acepta [A-Za-z0-9._-]+.
+trio_nombre_sesion_spec() {
+    local spec_num="$1" titulo="${2:-}"
+    local base_num raw clean
+    base_num="$(printf '%s' "$spec_num" | tr -cd 'A-Za-z0-9._-')"
+    [[ -n "$base_num" ]] || base_num="spec"
+
+    raw="$titulo"
+    # Transliteración de acentos comunes en español antes de sanear a ASCII.
+    raw="$(printf '%s' "$raw" | sed 'y/áéíóúüñÁÉÍÓÚÜÑ/aeiouunAEIOUUN/')"
+    clean="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/-+/-/g; s/^[.-]+//; s/[.-]+$//')"
+
+    local nombre
+    if [[ -n "$clean" ]]; then
+        nombre="${base_num}-${clean}"
+    else
+        nombre="spec-${base_num}"
+    fi
+    nombre="${nombre:0:48}"
+    nombre="$(printf '%s' "$nombre" | sed -E 's/[.-]+$//')"
+    [[ -n "$nombre" ]] || nombre="spec-${base_num}"
+    printf '%s\n' "$nombre"
+}
+
 nombre_agente() {
     local rol base t nombre max hash
     rol="$(sanear_nombre "$1")"
