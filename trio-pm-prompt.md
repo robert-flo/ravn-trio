@@ -26,11 +26,11 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
    Base: {{BASE_REF}}; el PR va contra {{BASE_PR}}. (Un sub-issue sale de la rama de su spec, que pj-trio recibe con --base; un trivial, de origin/HEAD.)
    Si la rama ya existe, usá otro slug. Anotá la ruta del worktree y la base en plan.md.
 3. Mandale el trabajo a WK vos mismo:
-   `herdr agent prompt {{AGENTE_WK}} "Sos WK del ticket #{{TICKET}}. Leé {{TRIO_DIR}}/plan.md, trabajá SOLO en el worktree <ruta>, abrí el PR contra {{BASE_PR}} con: gh pr create -R {{TICKET_REPO}}{{GH_PR_BASE}} (más título, body y --draft según tus reglas), y escribí {{TRIO_DIR}}/wk.md con PR, head sha y pruebas.{{WK_MERGE}}"`
+   `herdr agent prompt {{AGENTE_WK}} "{{WK_RULE_PREFIX}}Sos WK del ticket #{{TICKET}}. Leé {{TRIO_DIR}}/plan.md, trabajá SOLO en el worktree <ruta>, abrí el PR contra {{BASE_PR}} con: gh pr create -R {{TICKET_REPO}}{{GH_PR_BASE}} (más título, body y --draft según tus reglas), y escribí {{TRIO_DIR}}/wk.md con PR, head sha y pruebas.{{WK_MERGE}}"`
    Esperá con `herdr agent wait {{AGENTE_WK}} --timeout 600000` y confirmá con `herdr agent read {{AGENTE_WK}}` y que exista wk.md (idle sin wk.md NO es terminado). Si falla, aplicá la sección Fallos.
 {{NOTA_SUBISSUE}}
 4. (Trivial o PR final) Mandale la revisión a RV vos mismo:
-   `herdr agent prompt {{AGENTE_RV}} "Sos RV del ticket #{{TICKET}}. Revisá el PR <url> en head <sha> contra el ticket y {{TRIO_DIR}}/plan.md. Escribí {{TRIO_DIR}}/rv.md y comentá en el PR terminando en APRUEBO <sha> o BLOQUEO con motivos."`
+   `herdr agent prompt {{AGENTE_RV}} "{{RV_RULE_PREFIX}}Sos RV del ticket #{{TICKET}}. Revisá el PR <url> en head <sha> contra el ticket y {{TRIO_DIR}}/plan.md. Escribí {{TRIO_DIR}}/rv.md y comentá en el PR terminando en APRUEBO <sha> o BLOQUEO con motivos."`
    Esperá igual que con WK (wait + read + rv.md). Si falla, aplicá la sección Fallos.
 5. Si RV dice BLOQUEO, devolvéle los motivos a WK (paso 3) y repetí.
 6. Si RV dice APRUEBO <sha>, evaluás Merge Danger y mergeás vos (si corresponde) sobre ese head exacto y con el sha que nombró RV:

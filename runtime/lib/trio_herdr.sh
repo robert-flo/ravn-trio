@@ -45,8 +45,8 @@ enviar_kickoff() {
         return 0
     fi
     if [[ "${kickoff_en_arranque:-0}" -eq 1 ]]; then
-        # agy ya recibió el arranque con -i/--prompt-interactive al iniciar.
-        echo "Arranque enviado a ${target_agent} al iniciar agy (-i, sesión interactiva)."
+        # agy/cursor ya recibió el arranque al iniciar.
+        echo "Arranque enviado a ${target_agent} al iniciar ${target_kind} (sesión interactiva)."
         if [[ -f "${trio_dir}/status.json" ]]; then
             echo "status.json ya existía; se conserva (el agente retoma desde ahí)."
         elif [[ "$dry_run" -eq 1 ]]; then
@@ -82,13 +82,13 @@ enviar_kickoff() {
     "$trio_status" "$trio_dir" en-curso plan
 }
 
-# 5. Verificación de agentes disponibles para agy
+# 5. Verificación de agentes disponibles para agy y cursor
 verificar_agentes_disponibles() {
     local roles=(PM WK RV)
     if [[ "${modo_oneshot:-0}" -eq 1 ]]; then
         roles=(OS)
     fi
-    local necesita_agy=0
+    local necesita_agy=0 necesita_cursor=0
     for role in "${roles[@]}"; do
         local k=""
         case "$role" in
@@ -97,40 +97,53 @@ verificar_agentes_disponibles() {
             RV) k="$RV_KIND" ;;
             OS) k="$OS_KIND" ;;
         esac
-        if [[ "$k" == agy ]]; then
-            necesita_agy=1
-            break
-        fi
+        case "$k" in
+            agy) necesita_agy=1 ;;
+            cursor) necesita_cursor=1 ;;
+        esac
     done
 
     if [[ "$necesita_agy" -eq 1 ]]; then
         if ! command -v agy >/dev/null 2>&1; then
             if [[ "$dry_run" -eq 1 ]]; then
                 echo "[dry-run] Aviso: 'agy' no está en el PATH; se omite la verificación de agentes." >&2
-                return 0
+            else
+                print_error "el comando 'agy' no está disponible en el PATH." >&2
+                exit 1
             fi
-            print_error "el comando 'agy' no está disponible en el PATH." >&2
-            exit 1
-        fi
-        local available_agents
-        available_agents="$(agy agents 2>/dev/null || true)"
-        for role in "${roles[@]}"; do
-            local k=""
-            case "$role" in
-                PM) k="$PM_KIND" ;;
-                WK) k="$WK_KIND" ;;
-                RV) k="$RV_KIND" ;;
-                OS) k="$OS_KIND" ;;
-            esac
-            if [[ "$k" == agy ]]; then
-                local expected="${role}-${project_name}"
-                if ! echo "$available_agents" | grep -Fxq "$expected"; then
-                    print_error "el agente '$expected' no está disponible en 'agy agents'." >&2
-                    print_info "Asegurate de que el agente esté registrado en agy (ver 'agy agents')." >&2
-                    [[ "$dry_run" -eq 1 ]] || exit 1
+        else
+            local available_agents
+            available_agents="$(agy agents 2>/dev/null || true)"
+            for role in "${roles[@]}"; do
+                local k=""
+                case "$role" in
+                    PM) k="$PM_KIND" ;;
+                    WK) k="$WK_KIND" ;;
+                    RV) k="$RV_KIND" ;;
+                    OS) k="$OS_KIND" ;;
+                esac
+                if [[ "$k" == agy ]]; then
+                    local expected="${role}-${project_name}"
+                    if ! echo "$available_agents" | grep -Fxq "$expected"; then
+                        print_error "el agente '$expected' no está disponible en 'agy agents'." >&2
+                        print_info "Asegurate de que el agente esté registrado en agy (ver 'agy agents')." >&2
+                        [[ "$dry_run" -eq 1 ]] || exit 1
+                    fi
                 fi
+            done
+        fi
+    fi
+
+    if [[ "$necesita_cursor" -eq 1 ]]; then
+        if ! command -v cursor-agent >/dev/null 2>&1 \
+            && ! { command -v mise >/dev/null 2>&1 && mise x cursor-agent -- true >/dev/null 2>&1; }; then
+            if [[ "$dry_run" -eq 1 ]]; then
+                echo "[dry-run] Aviso: 'cursor-agent' no está disponible (ni en PATH ni vía mise); se omite la verificación." >&2
+            else
+                print_error "el comando 'cursor-agent' no está disponible en el PATH ni vía 'mise x cursor-agent'." >&2
+                exit 1
             fi
-        done
+        fi
     fi
 }
 
@@ -199,6 +212,39 @@ instalar_integraciones() {
     done
 }
 
+# Construye trio_agent_args=() y trio_kickoff_inline=0|1 para <role> <kind> <kickoff_file>.
+trio_construir_args_agente() {
+    local role="$1" kind="$2" kickoff_file="${3:-}"
+    trio_agent_args=()
+    trio_kickoff_inline=0
+
+    if [[ "$kind" == cursor ]]; then
+        trio_agent_args=(--yolo --trust --workspace "${work_dir:-$miembro_dir}" --add-dir "$project_dir")
+        if [[ ("$role" == PM || "$role" == OS) && "$kickoff" -eq 1 && -n "$kickoff_file" ]]; then
+            local rule_name="pm-trio"
+            [[ "$role" == OS ]] && rule_name="os"
+            trio_agent_args+=("$(trio_cursor_rule_ref "$rule_name") Lee y segui al pie de la letra las instrucciones de arranque del archivo ${kickoff_file}")
+            trio_kickoff_inline=1
+        fi
+        return 0
+    fi
+
+    trio_agent_args=(--agent "${role}-${project_name}")
+    if [[ -n "$repo_path" ]]; then
+        # El pane abre en el miembro; el meta-repo se añade al workspace de agy.
+        trio_agent_args+=(--add-dir "$project_dir")
+    fi
+    # agy 1.4.x: -i/--prompt-interactive envía el prompt inicial y sigue interactivo
+    # (https://antigravity.google/docs/cli/reference/). Evita depender de herdr agent prompt.
+    # herdr 0.9.5 rechaza argumentos con caracteres de control (saltos de línea)
+    # (herdrdev/herdr src/app/agents.rs:159, error invalid_agent_argument): el
+    # arranque va a un archivo y -i lleva solo una línea que apunta a él.
+    if [[ ("$role" == PM || "$role" == OS) && "$kind" == agy && "$kickoff" -eq 1 && -n "$kickoff_file" ]]; then
+        trio_agent_args+=(-i "Lee y segui al pie de la letra las instrucciones de arranque del archivo ${kickoff_file}")
+        trio_kickoff_inline=1
+    fi
+}
+
 # 11. Inicio de agentes por rol
 iniciar_agente_rol() {
     local role="$1"
@@ -233,40 +279,33 @@ iniciar_agente_rol() {
         return 0
     fi
 
-    local agent_args=(--agent "${role}-${project_name}")
-    if [[ -n "$repo_path" ]]; then
-        # El pane abre en el miembro; el meta-repo se añade al workspace de agy.
-        agent_args+=(--add-dir "$project_dir")
-    fi
-    # agy 1.4.x: -i/--prompt-interactive envía el prompt inicial y sigue interactivo
-    # (https://antigravity.google/docs/cli/reference/). Evita depender de herdr agent prompt.
-    # herdr 0.9.5 rechaza argumentos con caracteres de control (saltos de línea)
-    # (herdrdev/herdr src/app/agents.rs:159, error invalid_agent_argument): el
-    # arranque va a un archivo y -i lleva solo una línea que apunta a él.
-    local kickoff_target=0
+    local archivo_kickoff="" kickoff_target=0
     # Un PM o OS recién lanzado no tiene contexto: recibe siempre el arranque, aunque
     # exista status.json (p. ej. de un intento anterior en que no arrancó).
-    if [[ ("$role" == PM || "$role" == OS) && "$kind" == agy && "$kickoff" -eq 1 ]]; then
+    if [[ ("$role" == PM || "$role" == OS) && ("$kind" == agy || "$kind" == cursor) && "$kickoff" -eq 1 ]]; then
         if [[ -f "${trio_dir}/status.json" ]]; then
             echo "${role}: existe ${trio_dir}/status.json, pero el ${role} es nuevo: le paso el arranque igual."
         fi
-        local archivo_kickoff="${trio_dir}/kickoff.md"
+        archivo_kickoff="${trio_dir}/kickoff.md"
         mkdir -p "$trio_dir"
         if renderizar_kickoff > "$archivo_kickoff"; then
-            agent_args+=(-i "Lee y segui al pie de la letra las instrucciones de arranque del archivo ${archivo_kickoff}")
-            kickoff_target=1
-            echo "${role}: arranco agy con -i apuntando al arranque en ${archivo_kickoff} (ticket ${ticket})."
+            echo "${role}: arranco ${kind} apuntando al arranque en ${archivo_kickoff} (ticket ${ticket})."
+        else
+            archivo_kickoff=""
         fi
     fi
 
+    trio_construir_args_agente "$role" "$kind" "$archivo_kickoff"
+    kickoff_target="$trio_kickoff_inline"
+
     local start_output
-    if ! start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${agent_args[@]}" 2>&1)"; then
+    if ! start_output="$(herdr agent start "$agent_name" --kind "$kind" --pane "$pane_id" -- "${trio_agent_args[@]}" 2>&1)"; then
         # Si el agente requiere interacción o confirmación inicial (ej. prompts de bienvenida o permisos),
         # herdr reporta agent_not_ready. El proceso queda corriendo en el panel.
         # agent_not_ready y timeout (herdr src/cli/agent.rs:722-727, tras escribir ya el
-        # comando en el pane) significan que agy se lanzó aunque herdr no lo confirmó.
+        # comando en el pane) significan que el agente se lanzó aunque herdr no lo confirmó.
         if echo "$start_output" | jq -e '.error.code == "agent_not_ready" or .error.code == "timeout"' >/dev/null 2>&1; then
-            print_warn "${role}: herdr no confirmó el arranque a tiempo (diálogo de confianza?); agy ya quedó lanzado en ${pane_id}." >&2
+            print_warn "${role}: herdr no confirmó el arranque a tiempo (diálogo de confianza?); ${kind} ya quedó lanzado en ${pane_id}." >&2
             if [[ "$kickoff_target" -eq 1 ]]; then kickoff_en_arranque=1; fi
         else
             if [[ "$role" == PM || "$role" == OS ]]; then pm_fallo_inicio=1; fi
@@ -279,7 +318,11 @@ iniciar_agente_rol() {
             fi
             if [[ "$role" == PM || "$role" == OS ]]; then
                 print_error "el ${role} no arrancó; no se envía el arranque ni se marca status.json." >&2
-                print_info "Para recuperar, en el pane ${pane_id}: agy --agent ${role}-${project_name}${repo_path:+ --add-dir $project_dir} -i \"Lee y segui las instrucciones de arranque del archivo ${trio_dir}/kickoff.md\"" >&2
+                if [[ "$kind" == cursor ]]; then
+                    print_info "Para recuperar, en el pane ${pane_id}: cursor-agent ${trio_agent_args[*]}" >&2
+                else
+                    print_info "Para recuperar, en el pane ${pane_id}: agy --agent ${role}-${project_name}${repo_path:+ --add-dir $project_dir} -i \"Lee y segui las instrucciones de arranque del archivo ${trio_dir}/kickoff.md\"" >&2
+                fi
             fi
         fi
     else
