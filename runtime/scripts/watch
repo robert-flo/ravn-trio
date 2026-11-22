@@ -16,12 +16,13 @@ source "$PROJECT_DIR/lib/trio_project.sh"
 show_watch_help() {
   print_section "Watch Usage"
   cat <<'HELP_EOF'
-  Uso: pj-trio watch <proyecto> [--snapshot <archivo>] [--timeout <seg>] [--verbose] [--json]
+  Uso: pj-trio watch <proyecto> [--ticket <clave[,clave...]>] [--snapshot <archivo>] [--timeout <seg>] [--verbose] [--json]
 
   Argumentos:
     <proyecto>            Ruta o nombre del proyecto meta (pj-* / HR-*).
 
   Opciones:
+    --ticket <clave>      Filtra por clave o número de ticket (repetible o separado por comas).
     --snapshot <archivo>  Archivo JSON de snapshot previo/actual para detectar cambios inmediatos.
     --timeout <seg>       Tiempo máximo de espera en segundos (default: 1800). Sale con 124 si vence.
     --verbose             Despierta también en cambios de paso o tickets nuevos no terminales.
@@ -34,10 +35,30 @@ snapshot_file=""
 timeout_sec=1800
 verbose=0
 json_out=0
+ticket_filters=()
 positional=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --ticket)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        print_error "--ticket requiere una clave o lista separada por comas." >&2
+        exit 1
+      fi
+      if [[ "$2" == ,* || "$2" == *, || "$2" == *,,* ]]; then
+        print_error "--ticket contiene un elemento vacío en '$2'." >&2
+        exit 1
+      fi
+      IFS=',' read -r -a _ticket_parts <<<"$2"
+      for _tp in "${_ticket_parts[@]}"; do
+        if [[ -z "$_tp" ]]; then
+          print_error "--ticket contiene un elemento vacío en '$2'." >&2
+          exit 1
+        fi
+        ticket_filters+=("$_tp")
+      done
+      shift 2
+      ;;
     --snapshot)
       if [[ $# -lt 2 || -z "${2:-}" ]]; then
         print_error "--snapshot requiere un archivo." >&2
@@ -94,6 +115,39 @@ ticket=""
 export PJ_TRIO_NO_CLONE="${PJ_TRIO_NO_CLONE:-1}"
 trio_resolver_proyecto
 
+matches_clave() {
+  local clave="$1" f
+  for f in "${ticket_filters[@]}"; do
+    if [[ "$clave" == "$f" ]]; then
+      return 0
+    fi
+    if [[ "$f" =~ ^[0-9]+$ && "$clave" == *-"$f" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+matches_ticket_val() {
+  local tval="$1" f
+  for f in "${ticket_filters[@]}"; do
+    if [[ "$tval" == "$f" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+status_file_mentions_filter() {
+  local file="$1" f
+  for f in "${ticket_filters[@]}"; do
+    if grep -Fq -- "$f" "$file" 2>/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 collect_snapshot() {
   local -a status_files=()
   local status_file clave raw_status estado paso pr head_sha merge_danger ts ticket_val
@@ -106,9 +160,22 @@ collect_snapshot() {
 
   for status_file in "${status_files[@]}"; do
     clave="$(basename "$(dirname "$status_file")")"
-    if ! raw_status="$(jq -e '.' "$status_file" 2>/dev/null)"; then
-      print_warn "status.json inválido en ${clave}; se omite." >&2
-      continue
+    raw_status=""
+    ticket_val=""
+    if (( ${#ticket_filters[@]} > 0 )) && ! matches_clave "$clave"; then
+      status_file_mentions_filter "$status_file" || continue
+      raw_status="$(jq -e '.' "$status_file" 2>/dev/null || true)"
+      [[ -n "$raw_status" ]] || continue
+      ticket_val="$(jq -r --arg c "$clave" '.ticket // $c' <<<"$raw_status")"
+      matches_ticket_val "$ticket_val" || continue
+    fi
+
+    if [[ -z "$raw_status" ]]; then
+      if ! raw_status="$(jq -e '.' "$status_file" 2>/dev/null)"; then
+        print_warn "status.json inválido en ${clave}; se omite." >&2
+        continue
+      fi
+      ticket_val="$(jq -r --arg c "$clave" '.ticket // $c' <<<"$raw_status")"
     fi
 
     estado="$(jq -r '.estado // ""' <<<"$raw_status")"
@@ -117,7 +184,6 @@ collect_snapshot() {
     head_sha="$(jq -r '.head // ""' <<<"$raw_status")"
     merge_danger="$(jq -r '.merge_danger // ""' <<<"$raw_status")"
     ts="$(jq -r '.timestamp // ""' <<<"$raw_status")"
-    ticket_val="$(jq -r --arg c "$clave" '.ticket // $c' <<<"$raw_status")"
 
     if [[ "$clave" =~ ^(.+)-([0-9]+)$ ]]; then
       repo_name="${BASH_REMATCH[1]}"
@@ -178,7 +244,8 @@ collect_snapshot() {
 diff_snapshots() {
   local prev_json="$1"
   local curr_json="$2"
-  jq -n --argjson prev "$prev_json" --argjson curr "$curr_json" --argjson verbose "$verbose" '
+  local mode_verbose="${3:-$verbose}"
+  jq -n --argjson prev "$prev_json" --argjson curr "$curr_json" --argjson verbose "$mode_verbose" '
     [
       ($curr | keys_unsorted[]) as $k
       | ($prev[$k] // null) as $p
@@ -304,6 +371,12 @@ if [[ -n "$snapshot_file" && -f "$snapshot_file" ]]; then
     fi
   else
     print_warn "snapshot previo inválido en ${snapshot_file}; se reinicia." >&2
+  fi
+elif [[ -z "$snapshot_file" && ${#ticket_filters[@]} -gt 0 ]]; then
+  events="$(diff_snapshots "{}" "$curr_snapshot" 0)"
+  if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
+    enrich_and_emit "$events"
+    exit 0
   fi
 fi
 
