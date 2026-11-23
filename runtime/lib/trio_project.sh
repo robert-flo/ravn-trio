@@ -364,10 +364,20 @@ trio_nombres() {
     miembro_dir="${repo_path:-$project_dir}"
     # Worktrees con ravn-git-bare-clone (ADR 0019 de pj-template): bare en
     # $BARE_HOME/<repo>.git y worktrees en $WORKTREES_HOME/<repo>/<ticket>-<slug>.
+    # En un Home Repo (.bares/ o repos/ en $project_dir), usamos esos directorios
+    # locales en vez de /z/bare y /z/repos.
     miembro_slug="${repo_slug:-${project_slug:-}}"
     local nombre_wt="${miembro_slug#*/}"
     [[ -n "$nombre_wt" ]] || nombre_wt="$(trio_nombre_repo "$miembro_dir")"
-    wt_raiz="${WORKTREES_HOME:-/z/repos}/${nombre_wt}"
+    if [[ -d "${project_dir}/.bares" || -d "${project_dir}/repos" ]]; then
+        BARE_HOME="${BARE_HOME:-${project_dir}/.bares}"
+        WORKTREES_HOME="${WORKTREES_HOME:-${project_dir}/repos}"
+    else
+        BARE_HOME="${BARE_HOME:-/z/bare}"
+        WORKTREES_HOME="${WORKTREES_HOME:-/z/repos}"
+    fi
+    bare_dir="${BARE_HOME}/${nombre_wt}.git"
+    wt_raiz="${WORKTREES_HOME}/${nombre_wt}"
 }
 
 # 4b. Nombres de agente: <rol>-<miembro corto>-<ticket>. herdr exige

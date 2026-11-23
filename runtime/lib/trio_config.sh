@@ -123,9 +123,9 @@ renderizar_kickoff() {
         local spec_base_pr="${base_rama:-la rama por defecto}"
         local flujo_spec
         flujo_spec="1. Leé el spec y sus sub-issues vinculados (\`gh issue view {{TICKET}} -R {{ISSUE_REPO}} --comments\`) y escribí {{TRIO_DIR}}/plan.md con la rama del spec (${rama_spec}), el orden de sub-issues y sus criterios. Commit + push del meta-repo.
-2. Asegurá la rama del spec (${rama_spec}) en origin saliendo de {{BASE_REF}} (sin trabajar en el clon {{MIEMBRO_DIR}}): los worktrees de cada sub-issue saldrán de \`origin/${rama_spec}\` con \`ravn-git-bare-clone\`.
+2. Asegurá la rama del spec (${rama_spec}) en origin saliendo de {{BASE_REF}} (sin trabajar en el clon {{MIEMBRO_DIR}}): los worktrees de cada sub-issue saldrán de \`origin/${rama_spec}\` bajo {{WT_RAIZ}} (bare en {{BARE_HOME}}).
 3. Mandale el spec completo a WK vos mismo:
-   \`herdr agent prompt {{AGENTE_WK}} \"{{WK_RULE_PREFIX}}Sos WK del spec {{ISSUE_REPO}}#{{TICKET}}. Leé {{TRIO_DIR}}/plan.md y ejecutá /implement-spec sobre el spec #{{TICKET}}: por cada sub-issue creá un worktree nuevo con ravn-git-bare-clone sobre origin/${rama_spec}, implementá, corré /code-review y mergeá cada sub-PR a la rama del spec (${rama_spec}); al terminar todos los sub-issues, abrí el PR final de ${rama_spec} hacia ${spec_base_pr} con: gh pr create -R {{PR_REPO}}{{GH_PR_BASE}} (body con /pr referenciando {{ISSUE_REPO}}#{{TICKET}} y --draft según tus reglas), y escribí {{TRIO_DIR}}/wk.md con el PR final, head sha y pruebas.\"\`
+   \`herdr agent prompt {{AGENTE_WK}} \"{{WK_RULE_PREFIX}}Sos WK del spec {{ISSUE_REPO}}#{{TICKET}}. Leé {{TRIO_DIR}}/plan.md y ejecutá /implement-spec sobre el spec #{{TICKET}}: por cada sub-issue prepará el bare con {{WT_PREP}} y creá un worktree nuevo bajo {{WT_RAIZ}} sobre origin/${rama_spec} (si el bare ya existe, no reclones), implementá, corré /code-review y mergeá cada sub-PR a la rama del spec (${rama_spec}); al terminar todos los sub-issues, abrí el PR final de ${rama_spec} hacia ${spec_base_pr} con: gh pr create -R {{PR_REPO}}{{GH_PR_BASE}} (body con /pr referenciando {{ISSUE_REPO}}#{{TICKET}} y --draft según tus reglas), y escribí {{TRIO_DIR}}/wk.md con el PR final, head sha y pruebas.\"\`
    Esperá con \`herdr agent wait {{AGENTE_WK}} --timeout 600000\` y confirmá con \`herdr agent read {{AGENTE_WK}}\` y que exista wk.md (si devuelve \`idle\` sin wk.md, verificá actividad antes de contarlo como fallo). Si falla, aplicá la sección Fallos."
         local antes="${t%%1. Leé el ticket*}"
         local despues="4. (Trivial o PR final)${t#*4. (Trivial o PR final)}"
@@ -148,6 +148,16 @@ renderizar_kickoff() {
     t="${t//\{\{NOTA_SUBISSUE\}\}/"$nota_subissue"}"
     t="${t//\{\{WK_RULE_PREFIX\}\}/$wk_rule_prefix}"
     t="${t//\{\{RV_RULE_PREFIX\}\}/$rv_rule_prefix}"
+    local wt_prep=""
+    if [[ -n "${bare_dir:-}" && -d "${bare_dir}" ]]; then
+        wt_prep="git -C ${bare_dir} fetch origin"
+    else
+        wt_prep="BARE_HOME=${BARE_HOME:-/z/bare} WORKTREES_HOME=${WORKTREES_HOME:-/z/repos} ravn-git-bare-clone clone ${miembro_slug:-}"
+    fi
+    t="${t//\{\{BARE_HOME\}\}/"${BARE_HOME:-/z/bare}"}"
+    t="${t//\{\{WORKTREES_HOME\}\}/"${WORKTREES_HOME:-/z/repos}"}"
+    t="${t//\{\{BARE_DIR\}\}/"${bare_dir:-}"}"
+    t="${t//\{\{WT_PREP\}\}/"$wt_prep"}"
     t="${t//\{\{WT_RAIZ\}\}/"${wt_raiz:-}"}"
     t="${t//\{\{MIEMBRO_SLUG\}\}/"${miembro_slug:-}"}"
     t="${t//\{\{AGENTE_PM\}\}/$agent_pm}"
