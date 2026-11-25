@@ -23,7 +23,7 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
    `{{WT_PREP}} && git-create-worktree -r {{WT_RAIZ}} -B '{{BASE_REF}}' -b issue/{{TICKET}}-<slug> -p '' {{TICKET}}-<slug>`
    Queda en {{WT_RAIZ}}/{{TICKET}}-<slug>, en la rama issue/{{TICKET}}-<slug> (el bare vive en {{BARE_HOME}}). El clon {{MIEMBRO_DIR}} es para leer: nadie trabaja en él.
    Base: {{BASE_REF}}; el PR va contra {{BASE_PR}}.
-   Actualizá: `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso wk`.
+   Actualizá: `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso wk --heartbeat "$(date --iso-8601=seconds)" --lease`.
 3. Implementá el cambio mínimo necesario con `implement` (y `tdd` si aplica).
 4. **Prueba real (`Proof`)**:
    Corré las pruebas reales del repo (suite de pruebas y comandos del onboarding). Si no podés probar el cambio de verdad, no auto-mergeás.
@@ -33,7 +33,7 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
    Creá el PR con:
    `gh pr create -R {{PR_REPO}}{{GH_PR_BASE}} --title "..." --body "..."`
    El body debe usar la plantilla de `/pr` (`## Summary`, `## Evidence` con antes/después y `## Merge Danger` con `**Door:**` y `**Blast Radius:**`), enlazando {{OS_ISSUE_REF}}.
-   Actualizá: `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso rv --pr <url> --head <sha>`.
+   Actualizá: `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso rv --pr <url> --head <sha> --heartbeat "$(date --iso-8601=seconds)" --lease`.
 7. **Babysit PR y Merge Gate**:
    Vigilá CI con `gh pr checks <pr> -R {{PR_REPO}} --watch` (o esperá a que terminen los checks).
    Evaluá las condiciones estrictas del Merge Gate:
@@ -44,7 +44,7 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
    - `## Merge Danger` es exactamente `Door: two-way` y `Blast Radius: Low` (case-insensitive).
    
    - **Si califica para auto-merge**:
-     - `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso merge --pr <url> --head <sha>`
+     - `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso merge --pr <url> --head <sha> --heartbeat "$(date --iso-8601=seconds)" --lease`
      - `gh pr merge <pr> -R {{PR_REPO}} --squash --delete-branch --match-head-commit <sha>`
      - Obtené `merge_sha` con `gh pr view <pr> -R {{PR_REPO}} --json mergeCommit -q .mergeCommit.oid`.
      - Limpiá etiquetas `ready-for-agent` y `needs-*` del issue `{{TICKET}}` en `{{ISSUE_REPO}}` con `gh issue edit {{TICKET}} -R {{ISSUE_REPO}} --remove-label ready-for-agent`.

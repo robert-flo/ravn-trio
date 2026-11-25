@@ -7,6 +7,9 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 fallo() { echo "FALLO: $*" >&2; exit 1; }
 
+export TRIO_SHARE_DIR="$tmp/no-share" TRIO_OVERRIDE_DIR="$tmp/no-zt"
+unset PJ_TRIO_CONFIG TRIO_LEASE_MINUTES
+
 status_cmd="$aqui/trio-status"
 trio_dir="$tmp/trio-28"
 
@@ -40,27 +43,28 @@ trio_obs="$tmp/trio-obs"
   --heartbeat "2026-11-24T12:00:00-06:00" \
   --worktree "/z/repos/ravn-trio/225-trio-status-conf"
 
-jq -e '
+expected_lease_15="$(date -d "2026-11-24T12:00:00-06:00 + 15 minutes" --iso-8601=seconds)"
+jq -e --arg exp_lease "$expected_lease_15" '
   .estado == "en-curso" and .paso == "wk" and
   .owner == "wk-ravn-trio-225" and
   .branch == "issue/225-trio-status-conf" and
   .last_commit == "1234567" and
   .note == "corriendo tests" and
   .heartbeat_at == "2026-11-24T12:00:00-06:00" and
-  .lease_expires_at == "2026-11-24T12:15:00-06:00" and
+  .lease_expires_at == $exp_lease and
   .worktree == "/z/repos/ravn-trio/225-trio-status-conf"
 ' "$trio_obs/status.json" >/dev/null \
   || fallo "campos de observabilidad no se escribieron en status.json: $(cat "$trio_obs/status.json")"
 
 "$status_cmd" "$trio_obs" en-curso rv
-jq -e '
+jq -e --arg exp_lease "$expected_lease_15" '
   .estado == "en-curso" and .paso == "rv" and
   .owner == "wk-ravn-trio-225" and
   .branch == "issue/225-trio-status-conf" and
   .last_commit == "1234567" and
   .note == "corriendo tests" and
   .heartbeat_at == "2026-11-24T12:00:00-06:00" and
-  .lease_expires_at == "2026-11-24T12:15:00-06:00" and
+  .lease_expires_at == $exp_lease and
   .worktree == "/z/repos/ravn-trio/225-trio-status-conf"
 ' "$trio_obs/status.json" >/dev/null \
   || fallo "campos de observabilidad no se preservaron en llamada posterior: $(cat "$trio_obs/status.json")"
@@ -69,7 +73,8 @@ jq -e '
 mkdir -p "$tmp/pj-lease/.trio"
 printf 'TRIO_LEASE_MINUTES=25\n' > "$tmp/pj-lease/.trio/trio.conf"
 "$status_cmd" "$tmp/pj-lease/.trio/229" en-curso wk --heartbeat "2026-11-24T12:00:00-06:00" --lease
-jq -e '.lease_expires_at == "2026-11-24T12:25:00-06:00"' "$tmp/pj-lease/.trio/229/status.json" >/dev/null \
+expected_lease_25="$(date -d "2026-11-24T12:00:00-06:00 + 25 minutes" --iso-8601=seconds)"
+jq -e --arg exp_lease "$expected_lease_25" '.lease_expires_at == $exp_lease' "$tmp/pj-lease/.trio/229/status.json" >/dev/null \
   || fallo "--lease no respetó TRIO_LEASE_MINUTES=25 de trio.conf: $(cat "$tmp/pj-lease/.trio/229/status.json")"
 
 TRIO_LEASE_MINUTES=10 "$status_cmd" "$tmp/pj-lease/.trio/229" en-curso wk --lease

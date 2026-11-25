@@ -59,7 +59,6 @@ last_commit=""
 note=""
 heartbeat_at=""
 lease=0
-lease_minutes_arg=""
 worktree=""
 pos=()
 while [[ $# -gt 0 ]]; do
@@ -80,7 +79,6 @@ while [[ $# -gt 0 ]]; do
         --note) note="${2:?}"; shift 2 ;;
         --heartbeat) heartbeat_at="${2:?}"; shift 2 ;;
         --lease) lease=1; shift ;;
-        --lease=*) lease=1; lease_minutes_arg="${1#--lease=}"; shift ;;
         --worktree) worktree="${2:?}"; shift 2 ;;
         -h|--help) show_status_help; exit 0 ;;
         *) pos+=("$1"); shift ;;
@@ -118,7 +116,7 @@ if [[ "$lease" -eq 1 || -n "$heartbeat_at" ]]; then
         project_dir="$(dirname "$trio_dir")"
     fi
     trio_cargar_config
-    effective_lease_minutes="${lease_minutes_arg:-${env_lease_minutes:-${TRIO_LEASE_MINUTES:-15}}}"
+    effective_lease_minutes="${env_lease_minutes:-${TRIO_LEASE_MINUTES}}"
     [[ "$effective_lease_minutes" =~ ^[0-9]+$ ]] || {
         print_error "TRIO_LEASE_MINUTES inválido '$effective_lease_minutes'." >&2
         exit 1

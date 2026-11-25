@@ -38,7 +38,7 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
    Si el head del PR ya no es <sha> (cambió después del APRUEBO o el merge lo rechaza por eso), NO mergees: volvé al paso 4 para otra revisión.
    Leé el body del PR con `gh pr view <pr> -R {{PR_REPO}} --json body -q .body` y evaluá la sección `## Merge Danger`:
    - **Auto-merge** (solo si `Door: two-way` y `Blast Radius: Low`, case-insensitive):
-     - `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso merge --pr <url> --head <sha>`
+     - `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso merge --pr <url> --head <sha> --heartbeat "$(date --iso-8601=seconds)" --lease`
      - `gh pr merge <pr> -R {{PR_REPO}} --squash --delete-branch --match-head-commit <sha>`
      - Obtené `merge_sha` con `gh pr view <pr> -R {{PR_REPO}} --json mergeCommit -q .mergeCommit.oid`.
      - Limpiá etiquetas `ready-for-agent` y `needs-*` del issue `{{TICKET}}` en `{{ISSUE_REPO}}` (si existen) con `gh issue edit {{TICKET}} -R {{ISSUE_REPO}} --remove-label …`.
