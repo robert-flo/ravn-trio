@@ -18,7 +18,7 @@ source "$PROJECT_DIR/lib/trio_project.sh"
 show_fleet_help() {
   print_section "Fleet Status Usage"
   cat <<'HELP_EOF'
-  Uso: pj-trio fleet [<proyecto>] [--activos] [--json]
+  Uso: pj-trio fleet [<proyecto>] [--activos] [--json] [--no-gh]
 
   Argumentos:
     <proyecto>    Ruta o nombre del proyecto meta (pj-* / HR-*).
@@ -30,12 +30,14 @@ show_fleet_help() {
   Opciones:
     --activos     Muestra solo tríos con estado en-curso, needs-roberto o workspace abierto.
     --json        Imprime el resultado como array JSON.
+    --no-gh       Omite consultas a GitHub (gh) para modo rápido u offline.
     -h, --help    Muestra esta ayuda.
 HELP_EOF
 }
 
 activos=0
 json_out=0
+no_gh=0
 positional=()
 
 while [[ $# -gt 0 ]]; do
@@ -46,6 +48,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --json)
       json_out=1
+      shift
+      ;;
+    --no-gh)
+      no_gh=1
       shift
       ;;
     -h|--help)
@@ -209,6 +215,46 @@ _fleet_inspeccionar_agente_herdr() {
   fi
 }
 
+_fleet_inspeccionar_gh() {
+  local pr_url="$1" branch="$2" ticket_num="$3" paso="$4" pj_dir="$5" wt_dir="$6"
+  gh_pr_url="$pr_url"
+  gh_pr_state=""
+  gh_review_decision=""
+  gh_issue_state=""
+
+  local pr_repo="" pr_num="" pr_json=""
+  if [[ "$pr_url" =~ ^https?://github\.com/([^/]+/[^/]+)/pull/([0-9]+) ]]; then
+    pr_repo="${BASH_REMATCH[1]}"
+    pr_num="${BASH_REMATCH[2]}"
+    pr_json="$(gh pr view "$pr_num" -R "$pr_repo" --json state,reviewDecision,isDraft,mergedAt 2>/dev/null || true)"
+  elif [[ -n "$branch" ]]; then
+    [[ -n "$wt_dir" ]] && pr_repo="$(trio_slug_remoto "$wt_dir")"
+    [[ -n "$pr_repo" ]] || pr_repo="$(trio_slug_remoto "$pj_dir")"
+    if [[ -n "$pr_repo" ]]; then
+      pr_json="$(gh pr list -R "$pr_repo" --head "$branch" --state all --limit 1 --json url,state,reviewDecision,isDraft,mergedAt 2>/dev/null | jq -c '.[0] // empty' 2>/dev/null || true)"
+    fi
+  fi
+
+  if [[ -n "$pr_json" ]] && jq -e '.state' >/dev/null 2>&1 <<<"$pr_json"; then
+    gh_pr_state="$(jq -r '.state // ""' <<<"$pr_json")"
+    gh_review_decision="$(jq -r '.reviewDecision // ""' <<<"$pr_json")"
+    local discovered_url
+    discovered_url="$(jq -r '.url // ""' <<<"$pr_json")"
+    [[ -z "$gh_pr_url" && -n "$discovered_url" ]] && gh_pr_url="$discovered_url"
+  fi
+
+  local issue_repo=""
+  issue_repo="$(trio_slug_remoto "$pj_dir")"
+  [[ -n "$issue_repo" ]] || issue_repo="$pr_repo"
+  if [[ -n "$issue_repo" && "$ticket_num" =~ ^[0-9]+$ ]]; then
+    local issue_json
+    issue_json="$(gh issue view "$ticket_num" -R "$issue_repo" --json state 2>/dev/null || true)"
+    if [[ -n "$issue_json" ]]; then
+      gh_issue_state="$(jq -r '.state // ""' <<<"$issue_json")"
+    fi
+  fi
+}
+
 _fleet_calcular_estado_y_step() {
   local estado="$1" paso="$2" herdr_ok="$3" ws_id="$4" active_st="$5" quota="$6"
   local now_ep="$7" hb_ep="$8" ts_ep="$9" wt_dir="${10}" wt_commit_ep="${11}" wt_ahead="${12}"
@@ -351,6 +397,35 @@ for status_file in "${status_files[@]}"; do
     "$estado" "$paso" "$herdr_ok" "$workspace_id" "$active_herdr_status" "$quota_hit" \
     "$now_ep" "$hb_ep" "$ts_ep" "$wt_dir" "$wt_last_commit_epoch" "$wt_commits_ahead"
 
+  pr_hint="$(jq -r '.pr // ""' <<<"$raw_status")"
+  branch_hint="$(jq -r '.branch // ""' <<<"$raw_status")"
+  effective_branch="${wt_branch:-$branch_hint}"
+  effective_pr="$pr_hint"
+
+  if [[ "$no_gh" -eq 0 && "$estado" != "hecho" ]] && command -v gh >/dev/null 2>&1; then
+    gh_pr_url=""
+    gh_pr_state=""
+    gh_review_decision=""
+    gh_issue_state=""
+    _fleet_inspeccionar_gh "$pr_hint" "$effective_branch" "$ticket" "$paso" "$project_dir" "$wt_dir"
+    [[ -n "$gh_pr_url" ]] && effective_pr="$gh_pr_url"
+    case "$gh_pr_state" in
+      MERGED)
+        inferred_step="mergeado"
+        if [[ "$gh_issue_state" == "CLOSED" || -z "$gh_issue_state" ]]; then
+          estado_real="terminado"
+        fi
+        ;;
+      OPEN)
+        if [[ "$paso" == "rv" || "$gh_review_decision" == "REVIEW_REQUIRED" || "$gh_review_decision" == "CHANGES_REQUESTED" || "$gh_review_decision" == "APPROVED" ]]; then
+          inferred_step="en-review"
+        else
+          inferred_step="pr-abierto"
+        fi
+        ;;
+    esac
+  fi
+
   effective_owner="${active_agent_target:-$owner_hint}"
 
   item="$(jq -n \
@@ -364,6 +439,7 @@ for status_file in "${status_files[@]}"; do
     --arg worktree "$wt_dir" \
     --arg branch "$wt_branch" \
     --arg last_commit "$wt_last_commit" \
+    --arg pr "$effective_pr" \
     '{
       clave: $clave,
       ticket: ($s.ticket // $clave),
@@ -379,7 +455,7 @@ for status_file in "${status_files[@]}"; do
       worktree: (if $worktree != "" then $worktree else ($s.worktree // "") end),
       branch: (if $branch != "" then $branch else ($s.branch // "") end),
       last_commit: (if $last_commit != "" then $last_commit else ($s.last_commit // "") end),
-      pr: ($s.pr // ""),
+      pr: (if $pr != "" then $pr else ($s.pr // "") end),
       head: ($s.head // ""),
       merge_danger: ($s.merge_danger // ""),
       timestamp: ($s.timestamp // "")
