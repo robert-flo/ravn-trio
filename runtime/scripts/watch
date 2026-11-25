@@ -16,7 +16,7 @@ source "$PROJECT_DIR/lib/trio_project.sh"
 show_watch_help() {
   print_section "Watch Usage"
   cat <<'HELP_EOF'
-  Uso: pj-trio watch [<proyecto>] [--ticket <clave[,clave...]>] [--snapshot <archivo>] [--timeout <seg>] [--verbose] [--json]
+  Uso: pj-trio watch [<proyecto>] [--ticket <clave[,clave...]>] [--snapshot <archivo>] [--timeout <seg>] [--verbose] [--loop] [--no-notify] [--json]
 
   Argumentos:
     <proyecto>            Ruta o nombre del proyecto meta (pj-* / HR-*).
@@ -30,6 +30,8 @@ show_watch_help() {
     --snapshot <archivo>  Archivo JSON de snapshot previo/actual para detectar cambios inmediatos.
     --timeout <seg>       Tiempo máximo de espera en segundos (default: 1800). Sale con 124 si vence.
     --verbose             Despierta también en cambios de paso o tickets nuevos no terminales.
+    --loop                Mantiene la vigilancia continua tras cada lote de eventos hasta --timeout o señal.
+    --no-notify           Desactiva alertas de escritorio (herdr notification show / notify-send).
     --json                Imprime el resultado como JSON.
     -h, --help            Muestra esta ayuda.
 HELP_EOF
@@ -38,6 +40,8 @@ HELP_EOF
 snapshot_file=""
 timeout_sec=1800
 verbose=0
+loop_mode=0
+no_notify=0
 json_out=0
 ticket_filters=()
 positional=()
@@ -70,6 +74,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --verbose)
       verbose=1
+      shift
+      ;;
+    --loop)
+      loop_mode=1
+      shift
+      ;;
+    --no-notify)
+      no_notify=1
       shift
       ;;
     --json)
@@ -317,6 +329,77 @@ enrich_and_emit() {
   done
 }
 
+notify_events() {
+  [[ "$no_notify" -eq 0 ]] || return 0
+  local events_json="$1"
+  local count i ev clave estado estado_real pm_status paso
+  local urgencia sonido target_state titulo cuerpo
+
+  count="$(jq 'length' <<<"$events_json")"
+  for (( i = 0; i < count; i++ )); do
+    ev="$(jq -c ".[$i]" <<<"$events_json")"
+    clave="$(jq -r '.clave // ""' <<<"$ev")"
+    estado="$(jq -r '.estado // ""' <<<"$ev")"
+    estado_real="$(jq -r '.estado_real // ""' <<<"$ev")"
+    pm_status="$(jq -r '.pm_herdr_status // ""' <<<"$ev")"
+    paso="$(jq -r '.paso // ""' <<<"$ev")"
+
+    urgencia=""
+    sonido=""
+    target_state=""
+    case "$estado_real" in
+      sin-cuota|colgado|muerto)
+        urgencia="critical"
+        sonido="request"
+        target_state="$estado_real"
+        ;;
+      terminado)
+        urgencia="normal"
+        sonido="done"
+        target_state="terminado"
+        ;;
+      trabado)
+        urgencia="critical"
+        sonido="request"
+        target_state="trabado"
+        ;;
+    esac
+
+    if [[ -z "$target_state" ]]; then
+      case "$estado" in
+        hecho)
+          urgencia="normal"
+          sonido="done"
+          target_state="hecho"
+          ;;
+        needs-roberto|blocked)
+          urgencia="critical"
+          sonido="request"
+          target_state="$estado"
+          ;;
+        *)
+          if [[ "$pm_status" == "blocked" || "$pm_status" == "unknown" ]]; then
+            urgencia="critical"
+            sonido="request"
+            target_state="$pm_status"
+          fi
+          ;;
+      esac
+    fi
+
+    [[ -n "$target_state" ]] || continue
+
+    titulo="pj-trio watch: ${clave} (${target_state})"
+    cuerpo="estado=${estado:--} real=${estado_real:--} paso=${paso:--}"
+
+    if command -v herdr >/dev/null 2>&1 && herdr notification show "$titulo" --body "$cuerpo" --sound "$sonido" >/dev/null 2>&1; then
+      :
+    elif command -v notify-send >/dev/null 2>&1; then
+      notify-send -u "$urgencia" "$titulo" "$cuerpo" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
 emit_confirmed_events() {
   local prev_json="$1"
   local curr_json="$2"
@@ -330,6 +413,7 @@ emit_confirmed_events() {
   if [[ "$save_snap" -eq 1 ]]; then
     write_snapshot "$curr_snapshot"
   fi
+  notify_events "$events"
   enrich_and_emit "$events"
 }
 
@@ -340,7 +424,9 @@ if [[ -n "$snapshot_file" && -f "$snapshot_file" ]]; then
     events="$(diff_snapshots "$prev_snapshot" "$curr_snapshot")"
     if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
       emit_confirmed_events "$prev_snapshot" "$curr_snapshot" "$events" "$verbose" 1
-      exit 0
+      if [[ "$loop_mode" -eq 0 ]]; then
+        exit 0
+      fi
     fi
   else
     print_warn "snapshot previo inválido en ${snapshot_file}; se reinicia." >&2
@@ -349,7 +435,9 @@ elif [[ -z "$snapshot_file" && ${#ticket_filters[@]} -gt 0 ]]; then
   events="$(diff_snapshots "{}" "$curr_snapshot" 0)"
   if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
     emit_confirmed_events "{}" "$curr_snapshot" "$events" 0 0
-    exit 0
+    if [[ "$loop_mode" -eq 0 ]]; then
+      exit 0
+    fi
   fi
 fi
 
@@ -386,9 +474,10 @@ while true; do
   events="$(diff_snapshots "$baseline" "$curr_snapshot")"
   if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
     emit_confirmed_events "$baseline" "$curr_snapshot" "$events" "$verbose" 1
-    exit 0
-  fi
-  if [[ "$curr_snapshot" != "$baseline" ]]; then
+    if [[ "$loop_mode" -eq 0 ]]; then
+      exit 0
+    fi
+  elif [[ "$curr_snapshot" != "$baseline" ]]; then
     write_snapshot "$curr_snapshot"
   fi
   baseline="$curr_snapshot"
