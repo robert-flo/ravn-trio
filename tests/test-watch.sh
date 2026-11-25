@@ -25,6 +25,11 @@ cat > "$pj/.trio/ravn-trio-21/status.json" <<EOF
 EOF
 
 mkdir -p "$tmp/bin_stubs"
+cat > "$tmp/bin_stubs/notify-send" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$tmp/bin_stubs/notify-send"
 state_file="$tmp/herdr_mode"
 echo "running" > "$state_file"
 
@@ -668,7 +673,8 @@ case "\${1:-} \${2:-}" in
 esac
 EOF
 cp "$tmp/bin_stubs/inotifywait" "$tmp/bin_sess/inotifywait"
-chmod +x "$tmp/bin_sess/herdr" "$tmp/bin_sess/inotifywait"
+cp "$tmp/bin_stubs/notify-send" "$tmp/bin_sess/notify-send"
+chmod +x "$tmp/bin_sess/herdr" "$tmp/bin_sess/inotifywait" "$tmp/bin_sess/notify-send"
 
 gh_watch_log="$tmp/gh_watch.log"
 : > "$gh_watch_log"
@@ -834,5 +840,283 @@ out_term="$(PATH="$tmp/bin_sess:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket
 jq -e '.status == "changed" and .events[0].tipo == "estado_real" and .events[0].estado_real == "terminado" and .events[0].prev_estado_real == "vivo"' <<<"$out_term" >/dev/null \
   || fallo "confirmación de terminado vía gh falló: $out_term"
 [[ -s "$gh_watch_log" ]] || fallo "se esperaba consulta selectiva a gh para confirmar terminado"
+
+# 13. Notificaciones (herdr notification show + fallback notify-send), --no-notify y --loop.
+herdr_notif_log="$tmp/herdr_notif.log"
+notify_send_log="$tmp/notify_send.log"
+notif_fail_flag="$tmp/notif_fail"
+mkdir -p "$tmp/bin_notif"
+cat > "$tmp/bin_notif/herdr" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-} \${2:-}" == "notification show" ]]; then
+  if [[ -f "$notif_fail_flag" ]]; then
+    exit 1
+  fi
+  printf '%s\n' "\$*" >> "$herdr_notif_log"
+  exit 0
+fi
+if [[ "\${1:-}" != "--session" || "\${2:-}" != "spec-231" ]]; then
+  exit 1
+fi
+shift 2
+mode="\$(cat "$sess_herdr_mode" 2>/dev/null || echo ok)"
+case "\${1:-} \${2:-}" in
+  "workspace list")
+    echo '{"result":{"workspaces":[{"workspace_id":"ws31","label":"trio HR-SESS/ravn-trio#31"},{"workspace_id":"ws32","label":"trio HR-SESS/ravn-trio#32"}]}}'
+    ;;
+  "agent list")
+    echo '{"result":{"agents":[{"name":"pm-ravn-trio-31","agent_status":"idle","workspace_id":"ws31"},{"name":"wk-ravn-trio-31","agent_status":"running","workspace_id":"ws31"},{"name":"pm-ravn-trio-32","agent_status":"idle","workspace_id":"ws32"},{"name":"wk-ravn-trio-32","agent_status":"running","workspace_id":"ws32"}]}}'
+    ;;
+  "agent get")
+    case "\${3:-}" in
+      wk-ravn-trio-31)
+        if [[ "\$mode" == "dead" ]]; then
+          echo '{"result":{"agent":{"name":"wk-ravn-trio-31","agent_status":"exited","workspace_id":"ws31"}}}'
+        else
+          echo '{"result":{"agent":{"name":"wk-ravn-trio-31","agent_status":"running","workspace_id":"ws31"}}}'
+        fi
+        ;;
+      wk-ravn-trio-32)
+        if [[ "\$mode" == "dead32" ]]; then
+          echo '{"result":{"agent":{"name":"wk-ravn-trio-32","agent_status":"exited","workspace_id":"ws32"}}}'
+        else
+          echo '{"result":{"agent":{"name":"wk-ravn-trio-32","agent_status":"running","workspace_id":"ws32"}}}'
+        fi
+        ;;
+      pm-ravn-trio-*)
+        echo '{"result":{"agent":{"name":"'"\${3:-}"'","agent_status":"idle","workspace_id":"ws31"}}}'
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "agent read")
+    if [[ "\$mode" == "quota" && "\${3:-}" == "wk-ravn-trio-31" ]]; then
+      echo "Error 429: rate limit exceeded"
+    else
+      echo "working normally"
+    fi
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+cat > "$tmp/bin_notif/notify-send" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$notify_send_log"
+EOF
+cp "$tmp/bin_sess/gh" "$tmp/bin_notif/gh"
+chmod +x "$tmp/bin_notif/herdr" "$tmp/bin_notif/notify-send" "$tmp/bin_notif/gh"
+
+# 13a. herdr notification show con --sound request en sin-cuota y --sound done en terminado
+: > "$herdr_notif_log"
+: > "$notify_send_log"
+rm -f "$notif_fail_flag"
+echo "quota" > "$sess_herdr_mode"
+cat > "$pj_sess/.trio/ravn-trio-31/status.json" <<EOF
+{
+  "ticket": "ravn-trio-31",
+  "estado": "en-curso",
+  "paso": "wk",
+  "owner": "wk-ravn-trio-31",
+  "session": "spec-231",
+  "heartbeat_at": "$now_iso",
+  "timestamp": "$now_iso"
+}
+EOF
+cat > "$snap_sess" <<EOF
+{
+  "ravn-trio-31": {
+    "clave": "ravn-trio-31",
+    "ticket": "ravn-trio-31",
+    "estado": "en-curso",
+    "estado_real": "vivo",
+    "paso": "wk",
+    "pm_agent": "pm-ravn-trio-31",
+    "pm_herdr_status": "idle",
+    "session": "spec-231",
+    "pr": "",
+    "head": "",
+    "merge_danger": "",
+    "timestamp": "$now_iso"
+  }
+}
+EOF
+PATH="$tmp/bin_notif:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-31 --snapshot "$snap_sess" --json >/dev/null
+grep -qF -- '--sound request' "$herdr_notif_log" || fallo "esperaba --sound request en herdr notification show para sin-cuota: $(cat "$herdr_notif_log")"
+[[ ! -s "$notify_send_log" ]] || fallo "no debía invocar notify-send cuando herdr notification show funcionó: $(cat "$notify_send_log")"
+
+: > "$herdr_notif_log"
+echo "dead32" > "$sess_herdr_mode"
+cat > "$snap_sess" <<EOF
+{
+  "ravn-trio-32": {
+    "clave": "ravn-trio-32",
+    "ticket": "ravn-trio-32",
+    "estado": "en-curso",
+    "estado_real": "vivo",
+    "paso": "wk",
+    "pm_agent": "pm-ravn-trio-32",
+    "pm_herdr_status": "idle",
+    "session": "spec-231",
+    "pr": "https://github.com/o/ravn-trio/pull/32",
+    "head": "",
+    "merge_danger": "",
+    "timestamp": "$now_iso"
+  }
+}
+EOF
+PATH="$tmp/bin_notif:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-32 --snapshot "$snap_sess" --json >/dev/null
+grep -qF -- '--sound done' "$herdr_notif_log" || fallo "esperaba --sound done en herdr notification show para terminado: $(cat "$herdr_notif_log")"
+
+# 13b. Fallback a notify-send cuando herdr notification show falla (-u critical en muerto, -u normal en terminado)
+: > "$herdr_notif_log"
+: > "$notify_send_log"
+touch "$notif_fail_flag"
+echo "dead" > "$sess_herdr_mode"
+cat > "$snap_sess" <<EOF
+{
+  "ravn-trio-31": {
+    "clave": "ravn-trio-31",
+    "ticket": "ravn-trio-31",
+    "estado": "en-curso",
+    "estado_real": "vivo",
+    "paso": "wk",
+    "pm_agent": "pm-ravn-trio-31",
+    "pm_herdr_status": "idle",
+    "session": "spec-231",
+    "pr": "",
+    "head": "",
+    "merge_danger": "",
+    "timestamp": "$now_iso"
+  }
+}
+EOF
+PATH="$tmp/bin_notif:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-31 --snapshot "$snap_sess" --json >/dev/null
+grep -qF -- '-u critical pj-trio watch: ravn-trio-31 (muerto)' "$notify_send_log" \
+  || fallo "fallback notify-send critical para muerto falló: $(cat "$notify_send_log")"
+
+: > "$notify_send_log"
+echo "dead32" > "$sess_herdr_mode"
+cat > "$snap_sess" <<EOF
+{
+  "ravn-trio-32": {
+    "clave": "ravn-trio-32",
+    "ticket": "ravn-trio-32",
+    "estado": "en-curso",
+    "estado_real": "vivo",
+    "paso": "wk",
+    "pm_agent": "pm-ravn-trio-32",
+    "pm_herdr_status": "idle",
+    "session": "spec-231",
+    "pr": "https://github.com/o/ravn-trio/pull/32",
+    "head": "",
+    "merge_danger": "",
+    "timestamp": "$now_iso"
+  }
+}
+EOF
+PATH="$tmp/bin_notif:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-32 --snapshot "$snap_sess" --json >/dev/null
+grep -qF -- '-u normal pj-trio watch: ravn-trio-32 (terminado)' "$notify_send_log" \
+  || fallo "fallback notify-send normal para terminado falló: $(cat "$notify_send_log")"
+
+# 13c. --no-notify silencia herdr notification show y notify-send
+: > "$herdr_notif_log"
+: > "$notify_send_log"
+rm -f "$notif_fail_flag"
+cat > "$snap_sess" <<EOF
+{
+  "ravn-trio-32": {
+    "clave": "ravn-trio-32",
+    "ticket": "ravn-trio-32",
+    "estado": "en-curso",
+    "estado_real": "vivo",
+    "paso": "wk",
+    "pm_agent": "pm-ravn-trio-32",
+    "pm_herdr_status": "idle",
+    "session": "spec-231",
+    "pr": "https://github.com/o/ravn-trio/pull/32",
+    "head": "",
+    "merge_danger": "",
+    "timestamp": "$now_iso"
+  }
+}
+EOF
+PATH="$tmp/bin_notif:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-32 --snapshot "$snap_sess" --no-notify --json >/dev/null
+[[ ! -s "$herdr_notif_log" && ! -s "$notify_send_log" ]] \
+  || fallo "--no-notify no debía disparar alertas: herdr=$(cat "$herdr_notif_log") notify=$(cat "$notify_send_log")"
+
+# 13d. --loop procesa múltiples eventos consecutivos sin salir en el primero
+loop_step="$tmp/loop_step"
+echo "0" > "$loop_step"
+cat > "$tmp/bin_notif/inotifywait" <<EOF
+#!/usr/bin/env bash
+s="\$(cat "$loop_step" 2>/dev/null || echo 0)"
+s=\$(( s + 1 ))
+echo "\$s" > "$loop_step"
+if [[ "\$s" -eq 1 ]]; then
+  cat > "$pj_sess/.trio/ravn-trio-31/status.json" <<'JSON'
+{
+  "ticket": "ravn-trio-31",
+  "estado": "en-curso",
+  "paso": "wk",
+  "owner": "wk-ravn-trio-31",
+  "session": "spec-231",
+  "heartbeat_at": "2020-01-01T00:00:00-06:00",
+  "timestamp": "2020-01-01T00:00:00-06:00"
+}
+JSON
+  exit 0
+elif [[ "\$s" -eq 2 ]]; then
+  cat > "$pj_sess/.trio/ravn-trio-31/status.json" <<JSON
+{
+  "ticket": "ravn-trio-31",
+  "estado": "hecho",
+  "paso": "merge",
+  "owner": "wk-ravn-trio-31",
+  "session": "spec-231",
+  "heartbeat_at": "$now_iso",
+  "timestamp": "$now_iso"
+}
+JSON
+  exit 0
+fi
+sleep 2
+exit 2
+EOF
+chmod +x "$tmp/bin_notif/inotifywait"
+
+echo "ok" > "$sess_herdr_mode"
+cat > "$pj_sess/.trio/ravn-trio-31/status.json" <<EOF
+{
+  "ticket": "ravn-trio-31",
+  "estado": "en-curso",
+  "paso": "wk",
+  "owner": "wk-ravn-trio-31",
+  "session": "spec-231",
+  "heartbeat_at": "$now_iso",
+  "timestamp": "$now_iso"
+}
+EOF
+: > "$herdr_notif_log"
+rc_loop=0
+out_loop="$(PATH="$tmp/bin_notif:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-31 --loop --timeout 2 --json)" || rc_loop=$?
+[[ "$rc_loop" -eq 124 ]] || fallo "--loop debía seguir hasta --timeout 2 (exit 124), obtuve rc=$rc_loop ($out_loop)"
+grep -q '"estado_real": "colgado"' <<<"$out_loop" || fallo "--loop no emitió primer evento (colgado): $out_loop"
+grep -q '"estado": "hecho"' <<<"$out_loop" || fallo "--loop no emitió segundo evento (hecho): $out_loop"
+grep -qF -- 'pj-trio watch: ravn-trio-31 (colgado)' "$herdr_notif_log" || fallo "--loop no notificó colgado con herdr notification show: $(cat "$herdr_notif_log")"
+grep -qF -- '--sound request' "$herdr_notif_log" || fallo "--loop no usó --sound request para colgado: $(cat "$herdr_notif_log")"
+[[ "$(wc -l < "$herdr_notif_log")" -ge 2 ]] || fallo "--loop debía notificar ambos eventos: $(cat "$herdr_notif_log")"
+
+# 13e. Ayuda y completion incluyen --loop y --no-notify
+"$aqui/pj-trio" watch --help | grep -q -- '--loop' || fallo "--help debe documentar --loop"
+"$aqui/pj-trio" watch --help | grep -q -- '--no-notify' || fallo "--help debe documentar --no-notify"
+comp_loop="$(bash -c '
+  source "'"$aqui"'/runtime/completion/pj-trio.bash"
+  COMP_WORDS=(pj-trio watch --)
+  COMP_CWORD=2
+  _pj_trio_completion
+  printf "%s\n" "${COMPREPLY[@]}"
+')"
+grep -qx -- '--loop' <<<"$comp_loop" || fallo "completion de watch debe incluir --loop: $comp_loop"
+grep -qx -- '--no-notify' <<<"$comp_loop" || fallo "completion de watch debe incluir --no-notify: $comp_loop"
 
 echo "OK watch"

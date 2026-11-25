@@ -3,7 +3,7 @@ start	s --start -s	Start trio	Create or reuse the herdr workspace with PM, WK an
 kickoff	k --kickoff -k	Print PM kickoff	Render the PM kickoff prompt for a ticket (same as start --print-kickoff).		1	-h --help --repo --ticket-repo --base --spec --oneshot --kind
 status	st --status	Write status.json	Write .trio/<ticket>/status.json and optionally notify-send.		1	-h --help
 fleet	fl --fleet	Fleet status	Show consolidated status of all trios in a project.		1	-h --help --ticket --activos --json --no-gh
-watch	w --watch	Watch trios	Observe .trio/*/status.json and sub-PM health until a change or timeout.		1	-h --help --ticket --snapshot --timeout --verbose --json
+watch	w --watch	Watch trios	Observe .trio/*/status.json and sub-PM health until a change or timeout.		1	-h --help --ticket --snapshot --timeout --verbose --loop --no-notify --json
 close	c --close	Close spec session	Stop and delete a spec herdr session after verifying PR merge.		1	-h --help --repo --dry-run
 resume	r --resume	Resume trio agent	Hand off a stalled, dead or rate-limited agent to another kind with full context.		1	-h --help --kind --role --repo --ticket-repo --force --dry-run --print-resume
 help	h --help -h	Help and usage	Show this guide.	󰋖	1	-h --help
