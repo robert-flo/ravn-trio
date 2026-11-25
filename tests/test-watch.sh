@@ -1102,6 +1102,8 @@ out_loop="$(PATH="$tmp/bin_notif:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticke
 [[ "$rc_loop" -eq 124 ]] || fallo "--loop debía seguir hasta --timeout 2 (exit 124), obtuve rc=$rc_loop ($out_loop)"
 grep -q '"estado_real": "colgado"' <<<"$out_loop" || fallo "--loop no emitió primer evento (colgado): $out_loop"
 grep -q '"estado": "hecho"' <<<"$out_loop" || fallo "--loop no emitió segundo evento (hecho): $out_loop"
+grep -qF -- 'pj-trio watch: ravn-trio-31 (colgado)' "$herdr_notif_log" || fallo "--loop no notificó colgado con herdr notification show: $(cat "$herdr_notif_log")"
+grep -qF -- '--sound request' "$herdr_notif_log" || fallo "--loop no usó --sound request para colgado: $(cat "$herdr_notif_log")"
 [[ "$(wc -l < "$herdr_notif_log")" -ge 2 ]] || fallo "--loop debía notificar ambos eventos: $(cat "$herdr_notif_log")"
 
 # 13e. Ayuda y completion incluyen --loop y --no-notify

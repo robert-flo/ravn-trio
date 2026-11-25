@@ -332,62 +332,44 @@ enrich_and_emit() {
 notify_events() {
   [[ "$no_notify" -eq 0 ]] || return 0
   local events_json="$1"
-  local count i ev clave estado estado_real pm_status paso
+  local count i ev clave estado estado_real prev_estado prev_estado_real pm_status prev_pm_status paso
   local urgencia sonido target_state titulo cuerpo
 
   count="$(jq 'length' <<<"$events_json")"
   for (( i = 0; i < count; i++ )); do
     ev="$(jq -c ".[$i]" <<<"$events_json")"
-    clave="$(jq -r '.clave // ""' <<<"$ev")"
-    estado="$(jq -r '.estado // ""' <<<"$ev")"
-    estado_real="$(jq -r '.estado_real // ""' <<<"$ev")"
-    pm_status="$(jq -r '.pm_herdr_status // ""' <<<"$ev")"
-    paso="$(jq -r '.paso // ""' <<<"$ev")"
+    IFS=$'\t' read -r clave estado estado_real prev_estado prev_estado_real pm_status prev_pm_status paso < <(
+      jq -r '[(.clave // ""), (.estado // ""), (.estado_real // ""), (.prev_estado // ""), (.prev_estado_real // ""), (.pm_herdr_status // ""), (.prev_pm_herdr_status // ""), (.paso // "")] | @tsv' <<<"$ev"
+    )
 
-    urgencia=""
-    sonido=""
     target_state=""
-    case "$estado_real" in
-      sin-cuota|colgado|muerto)
-        urgencia="critical"
-        sonido="request"
-        target_state="$estado_real"
-        ;;
-      terminado)
-        urgencia="normal"
-        sonido="done"
-        target_state="terminado"
-        ;;
-      trabado)
-        urgencia="critical"
-        sonido="request"
-        target_state="trabado"
-        ;;
-    esac
-
-    if [[ -z "$target_state" ]]; then
-      case "$estado" in
-        hecho)
-          urgencia="normal"
-          sonido="done"
-          target_state="hecho"
-          ;;
-        needs-roberto|blocked)
-          urgencia="critical"
-          sonido="request"
-          target_state="$estado"
-          ;;
-        *)
-          if [[ "$pm_status" == "blocked" || "$pm_status" == "unknown" ]]; then
-            urgencia="critical"
-            sonido="request"
-            target_state="$pm_status"
-          fi
-          ;;
+    if [[ "$estado_real" != "$prev_estado_real" ]]; then
+      case "$estado_real" in
+        sin-cuota|colgado|muerto|terminado|trabado) target_state="$estado_real" ;;
       esac
     fi
-
+    if [[ -z "$target_state" && "$estado" != "$prev_estado" ]]; then
+      case "$estado" in
+        hecho|needs-roberto|blocked) target_state="$estado" ;;
+      esac
+    fi
+    if [[ -z "$target_state" && "$pm_status" != "$prev_pm_status" ]]; then
+      if [[ "$pm_status" == "blocked" || "$pm_status" == "unknown" ]]; then
+        target_state="$pm_status"
+      fi
+    fi
     [[ -n "$target_state" ]] || continue
+
+    case "$target_state" in
+      terminado|hecho)
+        urgencia="normal"
+        sonido="done"
+        ;;
+      *)
+        urgencia="critical"
+        sonido="request"
+        ;;
+    esac
 
     titulo="pj-trio watch: ${clave} (${target_state})"
     cuerpo="estado=${estado:--} real=${estado_real:--} paso=${paso:--}"
@@ -415,6 +397,9 @@ emit_confirmed_events() {
   fi
   notify_events "$events"
   enrich_and_emit "$events"
+  if [[ "$loop_mode" -eq 0 ]]; then
+    exit 0
+  fi
 }
 
 curr_snapshot="$(collect_snapshot)"
@@ -424,9 +409,6 @@ if [[ -n "$snapshot_file" && -f "$snapshot_file" ]]; then
     events="$(diff_snapshots "$prev_snapshot" "$curr_snapshot")"
     if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
       emit_confirmed_events "$prev_snapshot" "$curr_snapshot" "$events" "$verbose" 1
-      if [[ "$loop_mode" -eq 0 ]]; then
-        exit 0
-      fi
     fi
   else
     print_warn "snapshot previo inválido en ${snapshot_file}; se reinicia." >&2
@@ -435,9 +417,6 @@ elif [[ -z "$snapshot_file" && ${#ticket_filters[@]} -gt 0 ]]; then
   events="$(diff_snapshots "{}" "$curr_snapshot" 0)"
   if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
     emit_confirmed_events "{}" "$curr_snapshot" "$events" 0 0
-    if [[ "$loop_mode" -eq 0 ]]; then
-      exit 0
-    fi
   fi
 fi
 
@@ -474,9 +453,6 @@ while true; do
   events="$(diff_snapshots "$baseline" "$curr_snapshot")"
   if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
     emit_confirmed_events "$baseline" "$curr_snapshot" "$events" "$verbose" 1
-    if [[ "$loop_mode" -eq 0 ]]; then
-      exit 0
-    fi
   elif [[ "$curr_snapshot" != "$baseline" ]]; then
     write_snapshot "$curr_snapshot"
   fi
