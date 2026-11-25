@@ -173,13 +173,26 @@ grep -qF -- 'PR #77: PR demo 230 [OPEN]' <<<"$prompt_out" || fallo "falta estado
 grep -qF -- 'Kickoff original del ticket 230.' <<<"$prompt_out" || fallo "falta kickoff.md en prompt"
 
 # 4. Relevo inmediato en sin-cuota con --kind cursor, reemplaza panel en herdr y actualiza owner + lease_expires_at
+cat > "$pj/.trio/miembro-repo-230/status.json" <<EOF
+{
+  "ticket": "miembro-repo-230",
+  "estado": "en-curso",
+  "paso": "wk",
+  "owner": "pm-miembro-repo-230",
+  "worktree": "$wt",
+  "pr": "https://github.com/robert-flo/miembro-repo/pull/77",
+  "heartbeat_at": "$now_iso",
+  "lease_expires_at": "2020-01-01T00:00:00-06:00",
+  "timestamp": "$now_iso"
+}
+EOF
 : > "$herdr_log"
 PATH="$tmp/bin:$PATH" "$aqui/pj-trio" resume "$pj" 230 --repo "$miembro" --kind cursor --role wk >/dev/null
 grep -qF -- 'pane create --tab t2 --cwd '"$miembro" "$herdr_log" || fallo "no creó pane con --cwd miembro: $(cat "$herdr_log")"
 grep -qF -- 'pane close p2' "$herdr_log" || fallo "no cerró pane previo p2"
 grep -qE "agent start wk-miembro-repo-230 --kind cursor --pane p2_new -- .*--workspace $miembro --add-dir $pj" "$herdr_log" \
   || fallo "no arrancó cursor con --workspace miembro y --add-dir meta-repo: $(cat "$herdr_log")"
-jq -e '.owner == "wk-miembro-repo-230" and (.lease_expires_at // "") != ""' "$pj/.trio/miembro-repo-230/status.json" >/dev/null \
+jq -e '.owner == "wk-miembro-repo-230" and .lease_expires_at != "2020-01-01T00:00:00-06:00" and (.lease_expires_at // "") != ""' "$pj/.trio/miembro-repo-230/status.json" >/dev/null \
   || fallo "status.json no actualizó owner y lease_expires_at"
 
 # 5. Relevo con lease vencido aunque herdr diga vivo (sin --force)

@@ -266,8 +266,12 @@ if command -v gh >/dev/null 2>&1; then
     pr_json=""
     if [[ "$pr_hint" =~ ^https?://github\.com/([^/]+/[^/]+)/pull/([0-9]+) ]]; then
         pr_json="$(gh pr view "${BASH_REMATCH[2]}" -R "${BASH_REMATCH[1]}" --json number,url,state,title,reviewDecision,headRefName 2>/dev/null || true)"
-    elif [[ -n "${pr_repo:-}" && -n "$wt_branch" && "$wt_branch" != "HEAD" ]]; then
-        pr_json="$(gh pr list -R "$pr_repo" --head "$wt_branch" --state all --limit 1 --json number,url,state,title,reviewDecision,headRefName 2>/dev/null | jq -c '.[0] // empty' 2>/dev/null || true)"
+    elif [[ -n "$wt_branch" && "$wt_branch" != "HEAD" ]]; then
+        effective_pr_repo="$(trio_slug_remoto "$wt_dir" || true)"
+        [[ -n "$effective_pr_repo" ]] || effective_pr_repo="${pr_repo:-}"
+        if [[ -n "$effective_pr_repo" ]]; then
+            pr_json="$(gh pr list -R "$effective_pr_repo" --head "$wt_branch" --state all --limit 1 --json number,url,state,title,reviewDecision,headRefName 2>/dev/null | jq -c '.[0] // empty' 2>/dev/null || true)"
+        fi
     fi
     if [[ -n "$pr_json" ]] && jq -e '.url' >/dev/null 2>&1 <<<"$pr_json"; then
         pr_estado_texto="$(jq -r '"PR #\(.number): \(.title) [\(.state)] review=\(.reviewDecision // "NONE") (\(.url))"' <<<"$pr_json")"
@@ -290,7 +294,8 @@ renderizar_resume_prompt() {
     cat <<EOF
 # Relevo de agente — ${project_name} (${trio_clave})
 
-- **Rol:** ${target_role_upper} (\`${target_kind}\`)
+- **Rol:** ${target_role_upper}
+- **Issue:** ${issue_repo:-desconocido}#${ticket}
 - **Estado previo:** \`${estado_real}\` (lease_vencido=${lease_vencido}, force=${force})
 - **Worktree:** \`${wt_dir}\` (rama \`${wt_branch}\`)
 - **Estado del PR:** ${pr_estado_texto}
@@ -368,7 +373,7 @@ if [[ "$dry_run" -eq 1 ]]; then
     fi
     echo "[dry-run] $local_herdr_prefix agent start \"$agent_target\" --kind \"$target_kind\" --pane \"<pane_id>\" -- ${resume_agent_args[*]}"
     "$trio_status" --dry-run "${status_session_args[@]}" "$trio_dir" en-curso "$paso_actual" \
-        --owner "$agent_target" --heartbeat "$(date --iso-8601=seconds)" --lease --worktree "$wt_dir" --note "relevo (${target_kind})"
+        --owner "$agent_target" --heartbeat "$(date --iso-8601=seconds)" --lease --worktree "$wt_dir" --note "relevo (${target_role_upper})"
     exit 0
 fi
 
@@ -429,14 +434,18 @@ if ! start_out="$(trio_herdr agent start "$agent_target" --kind "$target_kind" -
 fi
 
 if [[ "$target_kind" == "agy" ]]; then
+    prompt_target="$agent_target"
+    if [[ -n "$target_pane" ]] && ! trio_herdr agent get "$agent_target" >/dev/null 2>&1; then
+        prompt_target="$target_pane"
+    fi
     if esperar_agente_listo "$agent_target" "$target_pane"; then
-        trio_herdr agent prompt "$agent_target" "Lee y segui al pie de la letra las instrucciones de relevo del archivo ${resume_file}" >/dev/null
+        trio_herdr agent prompt "$prompt_target" "Lee y segui al pie de la letra las instrucciones de relevo del archivo ${resume_file}" >/dev/null
     else
         print_warn "${agent_target} no quedó listo a tiempo; el prompt quedó en ${resume_file}." >&2
     fi
 fi
 
 "$trio_status" "${status_session_args[@]}" "$trio_dir" en-curso "$paso_actual" \
-    --owner "$agent_target" --heartbeat "$(date --iso-8601=seconds)" --lease --worktree "$wt_dir" --note "relevo (${target_kind})"
+    --owner "$agent_target" --heartbeat "$(date --iso-8601=seconds)" --lease --worktree "$wt_dir" --note "relevo (${target_role_upper})"
 
 print_success "Relevo lanzado para ${trio_clave}: ${agent_target} (${target_kind}) en workspace ${ws_id} (${target_pane})."
