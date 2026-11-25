@@ -90,9 +90,18 @@ _fleet_resolver_worktree() {
     printf '%s\n' "$wt_hint"
     return 0
   fi
-  [[ -n "$r_name" && -n "$t_num" ]] || return 0
+  [[ -n "$t_num" ]] || return 0
+  local -a bases=()
+  if [[ -n "$r_name" ]]; then
+    bases=("$pj_dir/repos/$r_name" "${WORKTREES_HOME:-/z/repos}/$r_name")
+  else
+    local sub
+    for sub in "$pj_dir/repos"/* "${WORKTREES_HOME:-/z/repos}"/*; do
+      [[ -d "$sub" ]] && bases+=("$sub")
+    done
+  fi
   local base d
-  for base in "$pj_dir/repos/$r_name" "/z/repos/$r_name"; do
+  for base in "${bases[@]}"; do
     [[ -d "$base" ]] || continue
     for d in "$base/${t_num}" "$base/${t_num}-"*; do
       [[ -d "$d" ]] || continue
@@ -150,15 +159,16 @@ _fleet_inspeccionar_agente_herdr() {
   case "$paso" in
     wk) rol="wk" ;;
     rv) rol="rv" ;;
+    os) rol="os" ;;
     *) rol="pm" ;;
   esac
 
   local -a candidates=()
-  [[ -n "$owner_hint" ]] && candidates+=("$owner_hint")
   candidates+=("$(nombre_agente "$rol")")
   if [[ "$rol" == "pm" || "$rol" == "wk" ]]; then
     candidates+=("$(nombre_agente os)")
   fi
+  [[ -n "$owner_hint" ]] && candidates+=("$owner_hint")
 
   local cand ag_json st="" target="" pane_id=""
   for cand in "${candidates[@]}"; do
@@ -175,7 +185,7 @@ _fleet_inspeccionar_agente_herdr() {
   if [[ -z "$target" && -n "$ws_id" && -n "$agent_list_cache" ]]; then
     local ag_match
     ag_match="$(jq -c --arg ws "$ws_id" --arg r "$rol" '
-      [.result.agents[]? | select(.workspace_id == $ws and ((.name // "") | startswith($r + "-")))] | .[0] // empty
+      [.result.agents[]? | select(.workspace_id == $ws and (((.name // "") | startswith($r + "-")) or ((.name // "") | startswith("os-"))))] | .[0] // empty
     ' <<<"$agent_list_cache" 2>/dev/null || true)"
     if [[ -n "$ag_match" ]]; then
       target="$(jq -r '(if (.name // "") != "" then .name else (.pane_id // "") end)' <<<"$ag_match")"
@@ -208,12 +218,12 @@ _fleet_calcular_estado_y_step() {
   (( wt_commit_ep > latest_ep )) && latest_ep="$wt_commit_ep"
 
   local stale_secs=$(( ${TRIO_STALE_MINUTES:-15} * 60 ))
-  local is_stale=0
+  local alive_state="vivo"
   if (( latest_ep > 0 && (now_ep - latest_ep) >= stale_secs )); then
-    is_stale=1
+    alive_state="colgado"
   fi
 
-  estado_real="desconocido"
+  estado_real="unavailable"
   if [[ "$quota" -eq 1 ]]; then
     estado_real="sin-cuota"
   elif [[ "$estado" == "blocked" || "$estado" == "needs-roberto" ]]; then
@@ -223,11 +233,7 @@ _fleet_calcular_estado_y_step() {
   elif [[ "$herdr_ok" -eq 1 ]]; then
     case "$active_st" in
       running|busy|working|idle)
-        if [[ "$is_stale" -eq 1 ]]; then
-          estado_real="colgado"
-        else
-          estado_real="vivo"
-        fi
+        estado_real="$alive_state"
         ;;
       exited|dead|stopped|closed|cerrado|unavailable)
         estado_real="muerto"
@@ -235,21 +241,11 @@ _fleet_calcular_estado_y_step() {
       *)
         if [[ -z "$ws_id" && "$estado" == "en-curso" ]]; then
           estado_real="muerto"
-        elif [[ "$is_stale" -eq 1 ]]; then
-          estado_real="colgado"
         else
-          estado_real="vivo"
+          estado_real="$alive_state"
         fi
         ;;
     esac
-  else
-    if [[ "$estado" == "hecho" ]]; then
-      estado_real="terminado"
-    elif [[ "$is_stale" -eq 1 ]]; then
-      estado_real="colgado"
-    else
-      estado_real="vivo"
-    fi
   fi
 
   if (( wt_ahead > 0 )); then
@@ -355,7 +351,7 @@ for status_file in "${status_files[@]}"; do
     "$estado" "$paso" "$herdr_ok" "$workspace_id" "$active_herdr_status" "$quota_hit" \
     "$now_ep" "$hb_ep" "$ts_ep" "$wt_dir" "$wt_last_commit_epoch" "$wt_commits_ahead"
 
-  effective_owner="${owner_hint:-$active_agent_target}"
+  effective_owner="${active_agent_target:-$owner_hint}"
 
   item="$(jq -n \
     --argjson s "$raw_status" \
@@ -409,14 +405,14 @@ if [[ "$herdr_ok" -eq 0 ]]; then
   print_warn "herdr no disponible; pm_herdr_status=unavailable."
 fi
 
-printf "  %-18s %-12s %-10s %-16s %-5s %-16s %s\n" \
-  "CLAVE" "REAL" "STEP" "OWNER" "WS" "DANGER" "PR"
-printf "  %-18s %-12s %-10s %-16s %-5s %-16s %s\n" \
-  "------------------" "------------" "----------" "----------------" "-----" "----------------" "--"
+printf "  %-18s %-12s %-10s %-16s %-5s %-16s %-22s %s\n" \
+  "CLAVE" "REAL" "STEP" "OWNER" "WS" "DANGER" "NOTE" "PR"
+printf "  %-18s %-12s %-10s %-16s %-5s %-16s %-22s %s\n" \
+  "------------------" "------------" "----------" "----------------" "-----" "----------------" "----------------------" "--"
 
-while IFS=$'\t' read -r c_clave c_real c_step c_owner c_ws c_danger c_pr; do
-  printf "  %-18s %-12s %-10s %-16s %-5s %-16s %s\n" \
-    "$c_clave" "$c_real" "$c_step" "$c_owner" "$c_ws" "$c_danger" "$c_pr"
+while IFS=$'\t' read -r c_clave c_real c_step c_owner c_ws c_danger c_note c_pr; do
+  printf "  %-18s %-12s %-10s %-16s %-5s %-16s %-22s %s\n" \
+    "$c_clave" "$c_real" "$c_step" "$c_owner" "$c_ws" "$c_danger" "$c_note" "$c_pr"
 done < <(jq -r '.[] | [
   (if .clave == "" then "-" else .clave end),
   (if .estado_real == "" then "-" else .estado_real end),
@@ -424,5 +420,6 @@ done < <(jq -r '.[] | [
   (if .owner != "" then .owner elif .pm_herdr_status != "" then .pm_herdr_status else "-" end),
   (if .workspace_id == "" then "-" else .workspace_id end),
   (if .merge_danger == "" then "-" else .merge_danger end),
+  (if .note == "" then "-" else (.note | gsub("[\t\r\n]+"; " ") | .[0:22]) end),
   (if .pr == "" then "-" else .pr end)
 ] | @tsv' <<<"$items_json")
