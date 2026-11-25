@@ -24,5 +24,8 @@ TRIO_HERDR_INTEGRATION_AGY="antigravity-cli"
 # Minutos sin heartbeat ni commits nuevos antes de considerar un agente vivo como colgado.
 TRIO_STALE_MINUTES="15"
 
+# Minutos de vigencia del lease de un ticket antes de permitir relevo automático.
+TRIO_LEASE_MINUTES="15"
+
 # Patrones ERE (case-insensitive) en la salida del panel para detectar sin-cuota.
 TRIO_QUOTA_PATTERNS="rate limit|rate_limit|quota exceeded|resource exhausted|resource_exhausted|too many requests|429|usage limit|insufficient_quota|out of quota|sin cuota"

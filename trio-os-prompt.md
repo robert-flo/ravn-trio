@@ -7,10 +7,11 @@ pj-trio te envía este mensaje de arranque. Llevás este ticket trivial de punta
 
 ## Handoff único
 - Carpeta: {{TRIO_DIR}} (en el meta-repo {{PROYECTO_DIR}}). Es la ÚNICA. Nunca la dupliques dentro de un repo miembro.
-- Archivos: os.md (vos), status.json. Commitealos en el meta-repo.
-- status.json lo escribís SIEMPRE con `{{TRIO_STATUS}} [--notify] {{TRIO_DIR}} <estado> <paso> [--error "…"] [--pr <url>] [--head <sha>] [--merge-sha <sha>] [--merge-danger "<texto>"] [--intentos N]`.
-  Esquema: ticket, estado (en-curso|hecho|needs-roberto), paso (plan|wk|rv|merge|cierre), error, intentos, timestamp, pr, head, merge_sha, merge_danger, cola.
-  Al empezar: `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso plan`.
+- Archivos: os.md (vos), HANDOFF.md (vos), status.json. Commitealos en el meta-repo.
+- **HANDOFF.md vivo y latido por hito:** en cada hito importante (al armar el plan/worktree, al terminar la implementación, al correr pruebas reales, al pasar code-review y al abrir el PR), reescribí `{{TRIO_DIR}}/HANDOFF.md` con qué se hizo, qué falta y el siguiente paso, y renová tu latido + lease con `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso <paso> --heartbeat "$(date --iso-8601=seconds)" --lease`.
+- status.json lo escribís SIEMPRE con `{{TRIO_STATUS}} [--notify] {{TRIO_DIR}} <estado> <paso> [--error "…"] [--pr <url>] [--head <sha>] [--merge-sha <sha>] [--merge-danger "<texto>"] [--intentos N] [--heartbeat <iso8601>] [--lease]`.
+  Esquema: ticket, estado (en-curso|hecho|needs-roberto), paso (plan|wk|rv|merge|cierre), error, intentos, timestamp, pr, head, merge_sha, merge_danger, heartbeat_at, lease_expires_at, cola.
+  Al empezar: `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso plan --heartbeat "$(date --iso-8601=seconds)" --lease`.
 
 ## Identidad git
 pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `git config user.*` ni pongas `--author`; sin trailers `Co-authored-by` ni atribución automática a agentes. Si `git config user.email` sale vacío, pará y marcá needs-roberto.

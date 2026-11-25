@@ -9,11 +9,12 @@ Roberto solo te pega (o pj-trio te envía) este mensaje. Desde acá vos llevás 
 
 ## Handoff único
 - Carpeta: {{TRIO_DIR}} (en el meta-repo {{PROYECTO_DIR}}). Es la ÚNICA. Nunca la dupliques dentro de un repo miembro.
-- Archivos: plan.md (PM), wk.md (WK), rv.md (RV), status.json (PM). Commitealos en el meta-repo.
+- Archivos: plan.md (PM), HANDOFF.md (PM/WK/RV), wk.md (WK), rv.md (RV), status.json (PM). Commitealos en el meta-repo.
 - Los archivos y los mensajes nombran solo roles (PM, WK, RV), nunca qué programa corre cada rol.
-- status.json lo escribís SIEMPRE con `{{TRIO_STATUS}} [--notify] {{TRIO_DIR}} <estado> <paso> [--error "…"] [--pr <url>] [--head <sha>] [--merge-sha <sha>] [--merge-danger "<texto>"] [--intentos N]`.
-  Esquema: ticket, estado (en-curso|hecho|needs-roberto), paso (plan|wk|rv|merge|cierre), error, intentos, timestamp, pr, head, merge_sha, merge_danger, cola.
-  Al empezar cada paso: `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso <paso>`.
+- **HANDOFF.md vivo y latido por hito:** en cada hito importante (al terminar plan.md, al lanzar o recibir a WK, al lanzar o recibir a RV, antes de esperar o mergear), reescribí `{{TRIO_DIR}}/HANDOFF.md` con qué se hizo, qué falta y el siguiente paso, y renová el latido + lease con `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso <paso> --heartbeat "$(date --iso-8601=seconds)" --lease`.
+- status.json lo escribís SIEMPRE con `{{TRIO_STATUS}} [--notify] {{TRIO_DIR}} <estado> <paso> [--error "…"] [--pr <url>] [--head <sha>] [--merge-sha <sha>] [--merge-danger "<texto>"] [--intentos N] [--heartbeat <iso8601>] [--lease]`.
+  Esquema: ticket, estado (en-curso|hecho|needs-roberto), paso (plan|wk|rv|merge|cierre), error, intentos, timestamp, pr, head, merge_sha, merge_danger, heartbeat_at, lease_expires_at, cola.
+  Al empezar cada paso: `{{TRIO_STATUS}} {{TRIO_DIR}} en-curso <paso> --heartbeat "$(date --iso-8601=seconds)" --lease`.
 
 ## Identidad git
 pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `git config user.*` ni pongas `--author`; si `git config user.email` sale vacío, pará y aplicá la regla de fallo definitivo (sección Fallos).
