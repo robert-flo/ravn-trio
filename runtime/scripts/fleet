@@ -18,7 +18,7 @@ source "$PROJECT_DIR/lib/trio_project.sh"
 show_fleet_help() {
   print_section "Fleet Status Usage"
   cat <<'HELP_EOF'
-  Uso: pj-trio fleet [<proyecto>] [--activos] [--json] [--no-gh]
+  Uso: pj-trio fleet [<proyecto>] [--ticket <clave[,clave...]>] [--activos] [--json] [--no-gh]
 
   Argumentos:
     <proyecto>    Ruta o nombre del proyecto meta (pj-* / HR-*).
@@ -28,20 +28,30 @@ show_fleet_help() {
                   pidiendo <proyecto>.
 
   Opciones:
-    --activos     Muestra solo tríos con estado en-curso, needs-roberto o workspace abierto.
-    --json        Imprime el resultado como array JSON.
-    --no-gh       Omite consultas a GitHub (gh) para modo rápido u offline.
-    -h, --help    Muestra esta ayuda.
+    --ticket <clave>  Filtra por clave o número de ticket (repetible o separado por comas).
+    --activos         Muestra solo tríos con estado en-curso, needs-roberto o workspace abierto.
+    --json            Imprime el resultado como array JSON.
+    --no-gh           Omite consultas a GitHub (gh) para modo rápido u offline.
+    -h, --help        Muestra esta ayuda.
 HELP_EOF
 }
 
 activos=0
 json_out=0
 no_gh=0
+ticket_filters=()
 positional=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --ticket)
+      if [[ $# -lt 2 ]]; then
+        print_error "--ticket requiere una clave o lista separada por comas." >&2
+        exit 1
+      fi
+      trio_parse_ticket_arg "$2" || exit 1
+      shift 2
+      ;;
     --activos)
       activos=1
       shift
@@ -145,18 +155,8 @@ _fleet_inspeccionar_git() {
   fi
 }
 
-_fleet_herdr_cmd() {
-  local sess="${1:-}"
-  shift
-  if [[ -n "$sess" ]]; then
-    herdr --session "$sess" "$@"
-  else
-    herdr "$@"
-  fi
-}
-
 _fleet_inspeccionar_agente_herdr() {
-  local paso="$1" owner_hint="$2" ws_id="$3" sess="$4"
+  local paso="$1" owner_hint="$2" ws_id="$3" sess="$4" ag_cache="${5:-}"
   active_agent_target=""
   active_herdr_status="unavailable"
   quota_hit=0
@@ -179,7 +179,7 @@ _fleet_inspeccionar_agente_herdr() {
   local cand ag_json st="" target="" pane_id=""
   for cand in "${candidates[@]}"; do
     [[ -n "$cand" ]] || continue
-    ag_json="$(_fleet_herdr_cmd "$sess" agent get "$cand" 2>/dev/null || true)"
+    ag_json="$(trio_herdr_cmd "$sess" agent get "$cand" 2>/dev/null || true)"
     if [[ -n "$ag_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$ag_json"; then
       target="$cand"
       st="$(jq -r '.result.agent.agent_status // "unknown"' <<<"$ag_json")"
@@ -188,11 +188,11 @@ _fleet_inspeccionar_agente_herdr() {
     fi
   done
 
-  if [[ -z "$target" && -n "$ws_id" && -n "$agent_list_cache" ]]; then
+  if [[ -z "$target" && -n "$ws_id" && -n "$ag_cache" ]]; then
     local ag_match
     ag_match="$(jq -c --arg ws "$ws_id" --arg r "$rol" '
       [.result.agents[]? | select(.workspace_id == $ws and (((.name // "") | startswith($r + "-")) or ((.name // "") | startswith("os-"))))] | .[0] // empty
-    ' <<<"$agent_list_cache" 2>/dev/null || true)"
+    ' <<<"$ag_cache" 2>/dev/null || true)"
     if [[ -n "$ag_match" ]]; then
       target="$(jq -r '(if (.name // "") != "" then .name else (.pane_id // "") end)' <<<"$ag_match")"
       st="$(jq -r '.agent_status // "unknown"' <<<"$ag_match")"
@@ -205,10 +205,10 @@ _fleet_inspeccionar_agente_herdr() {
 
   local tail_out=""
   if [[ -n "$target" ]]; then
-    tail_out="$(_fleet_herdr_cmd "$sess" agent read "$target" 2>/dev/null | tail -n 40 || true)"
+    tail_out="$(trio_herdr_cmd "$sess" agent read "$target" 2>/dev/null | tail -n 40 || true)"
   fi
   if [[ -z "$tail_out" && -n "$pane_id" ]]; then
-    tail_out="$(_fleet_herdr_cmd "$sess" pane read "$pane_id" 2>/dev/null | tail -n 40 || true)"
+    tail_out="$(trio_herdr_cmd "$sess" pane read "$pane_id" 2>/dev/null | tail -n 40 || true)"
   fi
   if [[ -n "$tail_out" && -n "${TRIO_QUOTA_PATTERNS:-}" ]] && grep -iEq "$TRIO_QUOTA_PATTERNS" <<<"$tail_out"; then
     quota_hit=1
@@ -278,7 +278,7 @@ _fleet_calcular_estado_y_step() {
     estado_real="terminado"
   elif [[ "$herdr_ok" -eq 1 ]]; then
     case "$active_st" in
-      running|busy|working|idle)
+      running|busy|working|idle|blocked)
         estado_real="$alive_state"
         ;;
       exited|dead|stopped|closed|cerrado|unavailable)
@@ -317,29 +317,60 @@ if [[ ${#status_files[@]} -eq 0 ]]; then
   exit 0
 fi
 
-# Consultar herdr workspace list una sola vez si está disponible
+herdr_cli_ok=0
 herdr_ok=0
-ws_json=""
-agent_list_cache=""
-declare -A ws_by_label=()
 if command -v herdr >/dev/null 2>&1; then
-  ws_json="$(herdr workspace list 2>/dev/null || true)"
-  if [[ -n "$ws_json" ]] && jq -e '.result.workspaces' >/dev/null 2>&1 <<<"$ws_json"; then
-    herdr_ok=1
-    agent_list_cache="$(herdr agent list 2>/dev/null || true)"
-    while IFS=$'\t' read -r w_label w_id; do
-      [[ -n "$w_label" ]] && ws_by_label["$w_label"]="$w_id"
-    done < <(jq -r '.result.workspaces[]? | [(.label // ""), (.workspace_id // "")] | @tsv' <<<"$ws_json")
-  fi
+  herdr_cli_ok=1
 fi
+declare -A ws_json_by_sess=()
+declare -A agent_list_by_sess=()
+declare -A ws_ok_by_sess=()
+declare -A ws_by_sess_label=()
+
+_fleet_cargar_cache_sesion() {
+  local sess="$1"
+  local sess_key="${sess:-__default__}"
+  [[ -n "${ws_ok_by_sess[$sess_key]:-}" ]] && return 0
+
+  ws_ok_by_sess["$sess_key"]=0
+  ws_json_by_sess["$sess_key"]=""
+  agent_list_by_sess["$sess_key"]=""
+  if [[ "$herdr_cli_ok" -ne 1 ]]; then
+    return 0
+  fi
+
+  local sess_ws sess_agents w_label w_id
+  sess_ws="$(trio_herdr_cmd "$sess" workspace list 2>/dev/null || true)"
+  if [[ -n "$sess_ws" ]] && jq -e '.result.workspaces' >/dev/null 2>&1 <<<"$sess_ws"; then
+    ws_ok_by_sess["$sess_key"]=1
+    herdr_ok=1
+    ws_json_by_sess["$sess_key"]="$sess_ws"
+    sess_agents="$(trio_herdr_cmd "$sess" agent list 2>/dev/null || true)"
+    agent_list_by_sess["$sess_key"]="$sess_agents"
+    while IFS=$'\t' read -r w_label w_id; do
+      [[ -n "$w_label" ]] && ws_by_sess_label["${sess_key}::${w_label}"]="$w_id"
+    done < <(jq -r '.result.workspaces[]? | [(.label // ""), (.workspace_id // "")] | @tsv' <<<"$sess_ws")
+  fi
+}
 
 # Construir filas
 items_json="[]"
 for status_file in "${status_files[@]}"; do
   clave="$(basename "$(dirname "$status_file")")"
-  if ! raw_status="$(jq -e '.' "$status_file" 2>/dev/null)"; then
-    print_warn "status.json inválido en ${clave}; se omite." >&2
-    continue
+  raw_status=""
+  if (( ${#ticket_filters[@]} > 0 )) && ! trio_ticket_matches_clave "$clave" "${ticket_filters[@]}"; then
+    trio_status_file_mentions_filter "$status_file" "${ticket_filters[@]}" || continue
+    raw_status="$(jq -e '.' "$status_file" 2>/dev/null || true)"
+    [[ -n "$raw_status" ]] || continue
+    ticket_val="$(jq -r --arg c "$clave" '.ticket // $c' <<<"$raw_status")"
+    trio_ticket_matches_val "$ticket_val" "${ticket_filters[@]}" || continue
+  fi
+
+  if [[ -z "$raw_status" ]]; then
+    if ! raw_status="$(jq -e '.' "$status_file" 2>/dev/null)"; then
+      print_warn "status.json inválido en ${clave}; se omite." >&2
+      continue
+    fi
   fi
 
   # Derivar repo_name y ticket_num para reconstruir ws_label y nombre del agente PM
@@ -354,34 +385,50 @@ for status_file in "${status_files[@]}"; do
   fi
   pm_agent="$(nombre_agente pm)"
 
-  workspace_id=""
-  pm_herdr_status="unavailable"
-  if [[ "$herdr_ok" -eq 1 ]]; then
-    os_agent="$(nombre_agente os)"
-    trio_resolver_agente_herdr "$pm_agent" "$os_agent" "$ws_label_lookup" "$ticket" "cerrado" "$ws_json" "$agent_list_cache"
-    pm_herdr_status="$trio_herdr_status"
-    workspace_id="${ws_by_label[$ws_label_lookup]:-${trio_herdr_ws_id:-}}"
-  fi
-
   estado="$(jq -r '.estado // ""' <<<"$raw_status")"
   paso="$(jq -r '.paso // ""' <<<"$raw_status")"
-  if [[ "$activos" -eq 1 ]]; then
-    if [[ "$estado" != "en-curso" && "$estado" != "needs-roberto" && "$estado" != "blocked" && -z "$workspace_id" ]]; then
-      continue
-    fi
-  fi
-
   owner_hint="$(jq -r '.owner // ""' <<<"$raw_status")"
   sess_hint="$(jq -r '.session // ""' <<<"$raw_status")"
   wt_hint="$(jq -r '.worktree // ""' <<<"$raw_status")"
   hb_hint="$(jq -r '.heartbeat_at // ""' <<<"$raw_status")"
   ts_hint="$(jq -r '.timestamp // ""' <<<"$raw_status")"
 
+  sess_key="${sess_hint:-__default__}"
+  _fleet_cargar_cache_sesion "$sess_hint"
+  sess_ws_ok="${ws_ok_by_sess[$sess_key]:-0}"
+  sess_ws_json="${ws_json_by_sess[$sess_key]:-}"
+  sess_agent_list="${agent_list_by_sess[$sess_key]:-}"
+
+  workspace_id=""
+  pm_herdr_status="unavailable"
+  pm_agent_target="$pm_agent"
+  if [[ "$herdr_cli_ok" -eq 1 ]]; then
+    os_agent="$(nombre_agente os)"
+    default_pm_st="unavailable"
+    [[ "$sess_ws_ok" -eq 1 ]] && default_pm_st="cerrado"
+    trio_resolver_agente_herdr "$pm_agent" "$os_agent" "$ws_label_lookup" "$ticket" "$default_pm_st" "$sess_ws_json" "$sess_agent_list" "$sess_hint"
+    pm_agent_target="$trio_herdr_target"
+    pm_herdr_status="$trio_herdr_status"
+    workspace_id="${ws_by_sess_label[${sess_key}::${ws_label_lookup}]:-${trio_herdr_ws_id:-}}"
+  fi
+
+  if [[ "$activos" -eq 1 ]]; then
+    if [[ "$estado" != "en-curso" && "$estado" != "needs-roberto" && "$estado" != "blocked" && -z "$workspace_id" ]]; then
+      continue
+    fi
+  fi
+
   active_agent_target=""
   active_herdr_status="unavailable"
   quota_hit=0
-  if [[ "$herdr_ok" -eq 1 ]]; then
-    _fleet_inspeccionar_agente_herdr "$paso" "$owner_hint" "$workspace_id" "$sess_hint"
+  if [[ "$herdr_cli_ok" -eq 1 ]]; then
+    _fleet_inspeccionar_agente_herdr "$paso" "$owner_hint" "$workspace_id" "$sess_hint" "$sess_agent_list"
+  fi
+
+  ticket_herdr_ok="$sess_ws_ok"
+  if [[ "$ticket_herdr_ok" -eq 0 && ( "$active_herdr_status" != "unavailable" || "$pm_herdr_status" != "unavailable" ) ]]; then
+    ticket_herdr_ok=1
+    herdr_ok=1
   fi
 
   wt_dir="$(_fleet_resolver_worktree "$wt_hint" "$project_dir" "$repo_name" "$ticket")"
@@ -394,7 +441,7 @@ for status_file in "${status_files[@]}"; do
   estado_real=""
   inferred_step=""
   _fleet_calcular_estado_y_step \
-    "$estado" "$paso" "$herdr_ok" "$workspace_id" "$active_herdr_status" "$quota_hit" \
+    "$estado" "$paso" "$ticket_herdr_ok" "$workspace_id" "$active_herdr_status" "$quota_hit" \
     "$now_ep" "$hb_ep" "$ts_ep" "$wt_dir" "$wt_last_commit_epoch" "$wt_commits_ahead"
 
   pr_hint="$(jq -r '.pr // ""' <<<"$raw_status")"
@@ -431,8 +478,10 @@ for status_file in "${status_files[@]}"; do
   item="$(jq -n \
     --argjson s "$raw_status" \
     --arg clave "$clave" \
+    --arg pm_agent "$pm_agent_target" \
     --arg pm_status "$pm_herdr_status" \
     --arg ws_id "$workspace_id" \
+    --arg sess "$sess_hint" \
     --arg estado_real "$estado_real" \
     --arg step "$inferred_step" \
     --arg owner "$effective_owner" \
@@ -448,8 +497,10 @@ for status_file in "${status_files[@]}"; do
       paso: ($s.paso // ""),
       step: $step,
       owner: $owner,
+      pm_agent: $pm_agent,
       pm_herdr_status: $pm_status,
       workspace_id: $ws_id,
+      session: $sess,
       heartbeat_at: ($s.heartbeat_at // ""),
       note: ($s.note // ""),
       worktree: (if $worktree != "" then $worktree else ($s.worktree // "") end),
