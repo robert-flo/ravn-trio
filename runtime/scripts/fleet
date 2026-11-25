@@ -216,7 +216,7 @@ _fleet_inspeccionar_agente_herdr() {
 }
 
 _fleet_inspeccionar_gh() {
-  local pr_url="$1" branch="$2" ticket_num="$3" paso="$4" pj_dir="$5" wt_dir="$6"
+  local pr_url="$1" branch="$2" ticket_num="$3" pj_dir="$4" wt_dir="$5"
   gh_pr_url="$pr_url"
   gh_pr_state=""
   gh_review_decision=""
@@ -226,12 +226,12 @@ _fleet_inspeccionar_gh() {
   if [[ "$pr_url" =~ ^https?://github\.com/([^/]+/[^/]+)/pull/([0-9]+) ]]; then
     pr_repo="${BASH_REMATCH[1]}"
     pr_num="${BASH_REMATCH[2]}"
-    pr_json="$(gh pr view "$pr_num" -R "$pr_repo" --json state,reviewDecision,isDraft,mergedAt 2>/dev/null || true)"
+    pr_json="$(gh pr view "$pr_num" -R "$pr_repo" --json state,reviewDecision,statusCheckRollup 2>/dev/null || true)"
   elif [[ -n "$branch" ]]; then
     [[ -n "$wt_dir" ]] && pr_repo="$(trio_slug_remoto "$wt_dir")"
     [[ -n "$pr_repo" ]] || pr_repo="$(trio_slug_remoto "$pj_dir")"
     if [[ -n "$pr_repo" ]]; then
-      pr_json="$(gh pr list -R "$pr_repo" --head "$branch" --state all --limit 1 --json url,state,reviewDecision,isDraft,mergedAt 2>/dev/null | jq -c '.[0] // empty' 2>/dev/null || true)"
+      pr_json="$(gh pr list -R "$pr_repo" --head "$branch" --state all --limit 1 --json url,state,reviewDecision,statusCheckRollup 2>/dev/null | jq -c '.[0] // empty' 2>/dev/null || true)"
     fi
   fi
 
@@ -407,12 +407,12 @@ for status_file in "${status_files[@]}"; do
     gh_pr_state=""
     gh_review_decision=""
     gh_issue_state=""
-    _fleet_inspeccionar_gh "$pr_hint" "$effective_branch" "$ticket" "$paso" "$project_dir" "$wt_dir"
+    _fleet_inspeccionar_gh "$pr_hint" "$effective_branch" "$ticket" "$project_dir" "$wt_dir"
     [[ -n "$gh_pr_url" ]] && effective_pr="$gh_pr_url"
     case "$gh_pr_state" in
       MERGED)
         inferred_step="mergeado"
-        if [[ "$gh_issue_state" == "CLOSED" || -z "$gh_issue_state" ]]; then
+        if [[ "$gh_issue_state" == "CLOSED" ]]; then
           estado_real="terminado"
         fi
         ;;

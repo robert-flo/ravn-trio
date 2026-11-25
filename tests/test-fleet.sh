@@ -329,7 +329,8 @@ mkdir -p \
   "$pj_gh/.trio/ravn-trio-30" \
   "$pj_gh/.trio/ravn-trio-31" \
   "$pj_gh/.trio/ravn-trio-32" \
-  "$pj_gh/.trio/ravn-trio-33"
+  "$pj_gh/.trio/ravn-trio-33" \
+  "$pj_gh/.trio/ravn-trio-34"
 git init -q "$pj_gh"
 git -C "$pj_gh" remote add origin "https://github.com/o/HR-GH.git"
 cat > "$pj_gh/proyecto.yml" <<'EOF'
@@ -348,6 +349,9 @@ EOF
 cat > "$pj_gh/.trio/ravn-trio-33/status.json" <<EOF
 {"ticket":"ravn-trio-33","estado":"hecho","paso":"cierre","pr":"https://github.com/o/ravn-trio/pull/33","timestamp":"$now_iso"}
 EOF
+cat > "$pj_gh/.trio/ravn-trio-34/status.json" <<EOF
+{"ticket":"ravn-trio-34","estado":"en-curso","paso":"merge","pr":"https://github.com/o/ravn-trio/pull/34","timestamp":"$now_iso"}
+EOF
 
 mkdir -p "$tmp/bin_gh"
 gh_log="$tmp/gh_calls.log"
@@ -357,9 +361,9 @@ printf '%s\n' "\$*" >> "$gh_log"
 case "\${1:-} \${2:-}" in
   "pr view")
     case "\${3:-}" in
-      30) echo '{"state":"OPEN","reviewDecision":"","isDraft":false}' ;;
-      31) echo '{"state":"OPEN","reviewDecision":"REVIEW_REQUIRED","isDraft":false}' ;;
-      32) echo '{"state":"MERGED","reviewDecision":"APPROVED","isDraft":false,"mergedAt":"2026-11-24T12:00:00Z"}' ;;
+      30) echo '{"state":"OPEN","reviewDecision":"","statusCheckRollup":[]}' ;;
+      31) echo '{"state":"OPEN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[]}' ;;
+      32|34) echo '{"state":"MERGED","reviewDecision":"APPROVED","statusCheckRollup":[]}' ;;
       *) exit 1 ;;
     esac
     ;;
@@ -382,6 +386,8 @@ jq -e '
   (.[] | select(.clave == "ravn-trio-31") | .step == "en-review")
   and
   (.[] | select(.clave == "ravn-trio-32") | .step == "mergeado" and .estado_real == "terminado")
+  and
+  (.[] | select(.clave == "ravn-trio-34") | .step == "mergeado" and .estado_real != "terminado")
 ' <<<"$json_gh" >/dev/null || fallo "cruce gh incorrecto: $json_gh"
 
 if grep -qE '(^| )33( |$)' "$gh_log"; then
