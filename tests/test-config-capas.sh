@@ -29,10 +29,12 @@ grep -q "Configuración (capas.*$tmp/zt/trio.conf.*$tmp/pj-demo/.trio/trio.conf"
 echo 'WK_KIND="kind-env"' >"$tmp/env.conf"
 grep -q 'kind-env' <<<"$(PJ_TRIO_CONFIG="$tmp/env.conf" kinds)" || fallo "PJ_TRIO_CONFIG reemplaza las capas"
 
-# Defaults de observabilidad: TRIO_STALE_MINUTES=15 y TRIO_QUOTA_PATTERNS no vacío,
+# Defaults de observabilidad: TRIO_STALE_MINUTES=15, TRIO_LEASE_MINUTES=15 y TRIO_QUOTA_PATTERNS no vacío,
 # sobrescribibles desde trio.conf.
 grep -qE '^TRIO_STALE_MINUTES="?15"?' "$aqui/trio.conf.example" \
   || fallo "trio.conf.example debe definir TRIO_STALE_MINUTES=15"
+grep -qE '^TRIO_LEASE_MINUTES="?15"?' "$aqui/trio.conf.example" \
+  || fallo "trio.conf.example debe definir TRIO_LEASE_MINUTES=15"
 grep -qE '^TRIO_QUOTA_PATTERNS=' "$aqui/trio.conf.example" \
   || fallo "trio.conf.example debe definir TRIO_QUOTA_PATTERNS"
 
@@ -45,12 +47,14 @@ bash -c '
   source "'"$aqui"'/runtime/lib/trio_config.sh"
   trio_cargar_config
   [[ "$TRIO_STALE_MINUTES" == "15" ]] || { echo "esperaba TRIO_STALE_MINUTES=15, dio $TRIO_STALE_MINUTES" >&2; exit 1; }
+  [[ "$TRIO_LEASE_MINUTES" == "15" ]] || { echo "esperaba TRIO_LEASE_MINUTES=15, dio $TRIO_LEASE_MINUTES" >&2; exit 1; }
   [[ -n "$TRIO_QUOTA_PATTERNS" ]] || { echo "esperaba TRIO_QUOTA_PATTERNS no vacío" >&2; exit 1; }
   grep -iEq "$TRIO_QUOTA_PATTERNS" <<<"Error 429: rate limit exceeded" || { echo "TRIO_QUOTA_PATTERNS debe detectar rate limit/429" >&2; exit 1; }
-  printf "TRIO_STALE_MINUTES=30\nTRIO_QUOTA_PATTERNS=\"mi-cuota\"\n" > "$project_dir/.trio/trio.conf"
+  printf "TRIO_STALE_MINUTES=30\nTRIO_LEASE_MINUTES=45\nTRIO_QUOTA_PATTERNS=\"mi-cuota\"\n" > "$project_dir/.trio/trio.conf"
   trio_cargar_config
   [[ "$TRIO_STALE_MINUTES" == "30" ]] || { echo "repo no sobrescribió TRIO_STALE_MINUTES: $TRIO_STALE_MINUTES" >&2; exit 1; }
+  [[ "$TRIO_LEASE_MINUTES" == "45" ]] || { echo "repo no sobrescribió TRIO_LEASE_MINUTES: $TRIO_LEASE_MINUTES" >&2; exit 1; }
   [[ "$TRIO_QUOTA_PATTERNS" == "mi-cuota" ]] || { echo "repo no sobrescribió TRIO_QUOTA_PATTERNS: $TRIO_QUOTA_PATTERNS" >&2; exit 1; }
-' || fallo "falló verificación de TRIO_STALE_MINUTES / TRIO_QUOTA_PATTERNS en trio_cargar_config"
+' || fallo "falló verificación de TRIO_STALE_MINUTES / TRIO_LEASE_MINUTES / TRIO_QUOTA_PATTERNS en trio_cargar_config"
 
 echo "OK config por capas"
