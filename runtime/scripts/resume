@@ -1,0 +1,451 @@
+#!/usr/bin/env bash
+
+# Resume command module: releva un agente caído, sin cuota o con lease vencido en herdr.
+# shellcheck disable=SC2034,SC2154 # Globals are shared with runtime/lib/trio_*.sh.
+set -Eeuo pipefail
+
+module_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091 # Resolved from the project root.
+source "$module_dir/../helper/set_variable.sh"
+PROJECT_DIR="$TRIO_RUNTIME_DIR"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/presentation.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/trio_project.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/trio_config.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/trio_herdr.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/trio_agy.sh"
+
+mostrar_uso_resume() {
+    print_section "Resume Trio Usage"
+    cat <<'EOF'
+Uso: pj-trio resume <proyecto> <ticket> [--kind agy|cursor] [--role wk|rv|pm|os] [--repo <miembro>] [--ticket-repo <owner/repo>] [--force] [--dry-run] [--print-resume]
+
+Argumentos:
+  <proyecto>        Ruta o nombre del proyecto meta (pj-* / HR-*).
+  <ticket>          Identificador del ticket / issue.
+
+Opciones:
+  --kind <kind>     Plataforma destino del relevo: agy o cursor.
+  --role <role>     Rol objetivo a relevar: wk, rv, pm u os.
+  --repo <miembro>  Repositorio miembro del proyecto (cwd del agente; meta-repo por --add-dir).
+  --ticket-repo <owner/repo>
+                    Repositorio de GitHub donde vive el issue.
+  --force           Permite relevar incluso si el agente sigue vivo y con lease vigente.
+  --dry-run         Muestra las acciones sin ejecutar cambios en herdr ni status.json.
+  --print-resume    Imprime el prompt de relevo ensamblado y sale sin tocar herdr.
+  -h, --help        Muestra esta ayuda.
+EOF
+}
+
+kind_arg=""
+role_arg=""
+repo_arg=""
+ticket_repo_arg=""
+ticket_repo_set=0
+force=0
+dry_run=0
+print_resume=0
+positional=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --kind)
+            [[ $# -ge 2 ]] || { print_error "--kind requiere un argumento (agy o cursor)." >&2; exit 1; }
+            kind_arg="$2"
+            shift 2
+            ;;
+        --kind=*)
+            kind_arg="${1#*=}"
+            shift
+            ;;
+        --role)
+            [[ $# -ge 2 ]] || { print_error "--role requiere un argumento (wk, rv, pm u os)." >&2; exit 1; }
+            role_arg="$2"
+            shift 2
+            ;;
+        --role=*)
+            role_arg="${1#*=}"
+            shift
+            ;;
+        --repo)
+            [[ $# -ge 2 ]] || { print_error "--repo requiere un argumento." >&2; exit 1; }
+            repo_arg="$2"
+            shift 2
+            ;;
+        --repo=*)
+            repo_arg="${1#*=}"
+            shift
+            ;;
+        --ticket-repo)
+            [[ $# -ge 2 ]] || { print_error "--ticket-repo requiere un argumento (<owner/repo>)." >&2; exit 1; }
+            ticket_repo_arg="$2"
+            ticket_repo_set=1
+            shift 2
+            ;;
+        --ticket-repo=*)
+            ticket_repo_arg="${1#*=}"
+            ticket_repo_set=1
+            shift
+            ;;
+        --force)
+            force=1
+            shift
+            ;;
+        --dry-run)
+            dry_run=1
+            shift
+            ;;
+        --print-resume)
+            print_resume=1
+            shift
+            ;;
+        -h|--help)
+            mostrar_uso_resume
+            exit 0
+            ;;
+        -*)
+            print_error "opción desconocida '$1'" >&2
+            mostrar_uso_resume >&2
+            exit 1
+            ;;
+        *)
+            positional+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ ${#positional[@]} -ne 2 ]]; then
+    print_error "se requieren exactamente dos argumentos posicionales (<proyecto> y <ticket>)." >&2
+    mostrar_uso_resume >&2
+    exit 1
+fi
+
+proyecto_arg="${positional[0]}"
+ticket="${positional[1]}"
+
+if [[ -n "$kind_arg" && "$kind_arg" != "agy" && "$kind_arg" != "cursor" ]]; then
+    print_error "--kind: '$kind_arg' no es válido (valores permitidos: agy, cursor)." >&2
+    exit 1
+fi
+
+if [[ -n "$role_arg" ]]; then
+    role_arg="$(echo "$role_arg" | tr '[:upper:]' '[:lower:]')"
+    case "$role_arg" in
+        wk|rv|pm|os) ;;
+        *)
+            print_error "--role: '$role_arg' no es válido (valores permitidos: wk, rv, pm, os)." >&2
+            exit 1
+            ;;
+    esac
+fi
+
+if [[ "$ticket_repo_set" -eq 1 && ! "$ticket_repo_arg" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+    print_error "--ticket-repo: '$ticket_repo_arg' debe tener formato <owner/repo>." >&2
+    exit 1
+fi
+
+export PJ_TRIO_NO_CLONE="${PJ_TRIO_NO_CLONE:-1}"
+trio_resolver_proyecto
+trio_cargar_config
+trio_nombres
+trio_localizar_recursos
+
+trio_clave="$(basename "$trio_dir")"
+status_file="${trio_dir}/status.json"
+raw_status="{}"
+[[ -f "$status_file" ]] && raw_status="$(cat "$status_file")"
+
+herdr_session="$(jq -r '.session // empty' <<<"$raw_status" 2>/dev/null || true)"
+paso_actual="$(jq -r '.paso // "wk"' <<<"$raw_status" 2>/dev/null || true)"
+[[ -n "$paso_actual" ]] || paso_actual="wk"
+owner_prev="$(jq -r '.owner // empty' <<<"$raw_status" 2>/dev/null || true)"
+lease_expires_at="$(jq -r '.lease_expires_at // empty' <<<"$raw_status" 2>/dev/null || true)"
+wt_hint="$(jq -r '.worktree // empty' <<<"$raw_status" 2>/dev/null || true)"
+pr_hint="$(jq -r '.pr // empty' <<<"$raw_status" 2>/dev/null || true)"
+
+# Determinar rol objetivo si no se pasó --role
+target_role="$role_arg"
+if [[ -z "$target_role" ]]; then
+    case "$owner_prev" in
+        wk-*) target_role="wk" ;;
+        rv-*) target_role="rv" ;;
+        os-*) target_role="os" ;;
+        pm-*) target_role="pm" ;;
+        *)
+            case "$paso_actual" in
+                wk|rv|os) target_role="$paso_actual" ;;
+                *) target_role="pm" ;;
+            esac
+            ;;
+    esac
+fi
+target_role_upper="$(echo "$target_role" | tr '[:lower:]' '[:upper:]')"
+
+# Determinar kind destino si no se pasó --kind
+target_kind="$kind_arg"
+if [[ -z "$target_kind" ]]; then
+    case "$target_role" in
+        pm) target_kind="${PM_KIND:-agy}" ;;
+        wk) target_kind="${WK_KIND:-agy}" ;;
+        rv) target_kind="${RV_KIND:-agy}" ;;
+        os) target_kind="${OS_KIND:-agy}" ;;
+    esac
+fi
+
+# Resolver worktree en disco
+resolver_worktree_resume() {
+    local hint="$1"
+    if [[ -n "$hint" && -d "$hint" ]] && git -C "$hint" rev-parse --git-dir >/dev/null 2>&1; then
+        printf '%s\n' "$hint"
+        return 0
+    fi
+    local -a bases=()
+    if [[ -n "${repo_name:-}" ]]; then
+        bases=("$project_dir/repos/$repo_name" "${WORKTREES_HOME:-/z/repos}/$repo_name")
+    else
+        local sub
+        for sub in "$project_dir/repos"/* "${WORKTREES_HOME:-/z/repos}"/*; do
+            [[ -d "$sub" ]] && bases+=("$sub")
+        done
+    fi
+    local base d
+    for base in "${bases[@]}"; do
+        [[ -d "$base" ]] || continue
+        for d in "$base/${ticket}" "$base/${ticket}-"*; do
+            [[ -d "$d" ]] || continue
+            if git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+                printf '%s\n' "$d"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
+wt_dir="$(resolver_worktree_resume "$wt_hint" || true)"
+if [[ -z "$wt_dir" || ! -d "$wt_dir" ]] || ! git -C "$wt_dir" rev-parse --git-dir >/dev/null 2>&1; then
+    print_error "no se encontró un worktree válido en disco para ${trio_clave}." >&2
+    exit 1
+fi
+
+# Evaluar estado real vía fleet + lease
+fleet_json="$("$TRIO_ROOT/pj-trio" fleet "$project_dir" --json --no-gh 2>/dev/null || echo "[]")"
+fleet_item="$(jq -c --arg c "$trio_clave" '.[] | select(.clave == $c)' <<<"$fleet_json" 2>/dev/null || true)"
+estado_real="$(jq -r '.estado_real // "unavailable"' <<<"$fleet_item" 2>/dev/null || echo "unavailable")"
+ws_id_fleet="$(jq -r '.workspace_id // ""' <<<"$fleet_item" 2>/dev/null || true)"
+
+lease_vencido=0
+if [[ -n "$lease_expires_at" ]]; then
+    lease_ep="$(date -d "$lease_expires_at" +%s 2>/dev/null || echo 0)"
+    now_ep="$(date +%s)"
+    if (( lease_ep > 0 && now_ep >= lease_ep )); then
+        lease_vencido=1
+    fi
+fi
+
+# Guarda anti-colisión: rechazar si vivo con lease vigente y sin --force
+if [[ "$force" -eq 0 && "$estado_real" == "vivo" && "$lease_vencido" -eq 0 ]]; then
+    print_error "el agente de ${trio_clave} sigue vivo (estado_real=vivo, lease=${lease_expires_at:-sin-expiración}); usá --force para relevarlo." >&2
+    exit 1
+fi
+
+# Ensamblar contexto git y PR para el prompt de relevo
+wt_branch="$(git -C "$wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "desconocida")"
+git_status_out="$(git -C "$wt_dir" status -sb 2>/dev/null || echo "(sin estado git)")"
+git_log_out="$(git -C "$wt_dir" log -n 5 --oneline 2>/dev/null || echo "(sin commits)")"
+git_diff_stat="$(git -C "$wt_dir" diff --stat 2>/dev/null || true)"
+[[ -n "$git_diff_stat" ]] || git_diff_stat="(sin cambios sin commitear)"
+
+pr_estado_texto="(sin PR registrado)"
+if command -v gh >/dev/null 2>&1; then
+    pr_json=""
+    if [[ "$pr_hint" =~ ^https?://github\.com/([^/]+/[^/]+)/pull/([0-9]+) ]]; then
+        pr_json="$(gh pr view "${BASH_REMATCH[2]}" -R "${BASH_REMATCH[1]}" --json number,url,state,title,reviewDecision,headRefName 2>/dev/null || true)"
+    elif [[ -n "$wt_branch" && "$wt_branch" != "HEAD" ]]; then
+        effective_pr_repo="$(trio_slug_remoto "$wt_dir" || true)"
+        [[ -n "$effective_pr_repo" ]] || effective_pr_repo="${pr_repo:-}"
+        if [[ -n "$effective_pr_repo" ]]; then
+            pr_json="$(gh pr list -R "$effective_pr_repo" --head "$wt_branch" --state all --limit 1 --json number,url,state,title,reviewDecision,headRefName 2>/dev/null | jq -c '.[0] // empty' 2>/dev/null || true)"
+        fi
+    fi
+    if [[ -n "$pr_json" ]] && jq -e '.url' >/dev/null 2>&1 <<<"$pr_json"; then
+        pr_estado_texto="$(jq -r '"PR #\(.number): \(.title) [\(.state)] review=\(.reviewDecision // "NONE") (\(.url))"' <<<"$pr_json")"
+    elif [[ -n "$pr_hint" ]]; then
+        pr_estado_texto="PR registrado: ${pr_hint}"
+    fi
+elif [[ -n "$pr_hint" ]]; then
+    pr_estado_texto="PR registrado: ${pr_hint}"
+fi
+
+handoff_file="${trio_dir}/HANDOFF.md"
+handoff_content="(sin HANDOFF.md)"
+[[ -f "$handoff_file" ]] && handoff_content="$(cat "$handoff_file")"
+
+kickoff_file="${trio_dir}/kickoff.md"
+kickoff_content="(sin kickoff.md)"
+[[ -f "$kickoff_file" ]] && kickoff_content="$(cat "$kickoff_file")"
+
+renderizar_resume_prompt() {
+    cat <<EOF
+# Relevo de agente — ${project_name} (${trio_clave})
+
+- **Rol:** ${target_role_upper}
+- **Issue:** ${issue_repo:-desconocido}#${ticket}
+- **Estado previo:** \`${estado_real}\` (lease_vencido=${lease_vencido}, force=${force})
+- **Worktree:** \`${wt_dir}\` (rama \`${wt_branch}\`)
+- **Estado del PR:** ${pr_estado_texto}
+
+## HANDOFF.md
+${handoff_content}
+
+## status.json
+\`\`\`json
+${raw_status}
+\`\`\`
+
+## Contexto git del worktree
+### git status -sb
+\`\`\`text
+${git_status_out}
+\`\`\`
+
+### git log -n 5 --oneline
+\`\`\`text
+${git_log_out}
+\`\`\`
+
+### git diff --stat
+\`\`\`text
+${git_diff_stat}
+\`\`\`
+
+## kickoff.md original
+${kickoff_content}
+EOF
+}
+
+if [[ "$print_resume" -eq 1 ]]; then
+    renderizar_resume_prompt
+    exit 0
+fi
+
+agent_target="$(nombre_agente "$target_role")"
+pane_title="${target_role_upper}-${ticket}"
+work_dir="${repo_path:-$project_dir}"
+resume_file="${trio_dir}/resume-${target_role}.md"
+
+# Construir args del agente destino preservando --repo (cwd miembro + --add-dir meta-repo)
+construir_args_relevo() {
+    resume_agent_args=()
+    if [[ "$target_kind" == "cursor" ]]; then
+        local rule_name="$target_role"
+        [[ "$target_role" == "pm" ]] && rule_name="pm-trio"
+        resume_agent_args=(--yolo --trust --workspace "$work_dir" --add-dir "$project_dir" "$(trio_cursor_rule_ref "$rule_name") Lee y segui al pie de la letra las instrucciones de relevo del archivo ${resume_file}")
+    else
+        resume_agent_args=(--agent "${target_role_upper}-${project_name}")
+        if [[ -n "$repo_path" ]]; then
+            resume_agent_args+=(--add-dir "$project_dir")
+        fi
+    fi
+}
+
+construir_args_relevo
+
+local_herdr_prefix="herdr"
+[[ -n "$herdr_session" ]] && local_herdr_prefix="herdr --session \"$herdr_session\""
+status_session_args=()
+[[ -n "$herdr_session" ]] && status_session_args=(--session "$herdr_session")
+
+if [[ "$dry_run" -eq 1 ]]; then
+    echo "[dry-run] Proyecto: $project_dir ($project_name) | Clave: $trio_clave"
+    echo "[dry-run] Estado real: $estado_real | Lease vencido: $lease_vencido | Target: $agent_target ($target_kind)"
+    echo "[dry-run] Worktree: $wt_dir | cwd: $work_dir"
+    echo "[dry-run] Escribir prompt de relevo en $resume_file"
+    if [[ -n "$ws_id_fleet" ]]; then
+        echo "[dry-run] $local_herdr_prefix pane create/replace en workspace $ws_id_fleet (tab $target_role, pane $pane_title)"
+    else
+        echo "[dry-run] $local_herdr_prefix workspace create --cwd \"$work_dir\" --label \"$ws_label\" --no-focus"
+    fi
+    echo "[dry-run] $local_herdr_prefix agent start \"$agent_target\" --kind \"$target_kind\" --pane \"<pane_id>\" -- ${resume_agent_args[*]}"
+    "$trio_status" --dry-run "${status_session_args[@]}" "$trio_dir" en-curso "$paso_actual" \
+        --owner "$agent_target" --heartbeat "$(date --iso-8601=seconds)" --lease --worktree "$wt_dir" --note "relevo (${target_role_upper})"
+    exit 0
+fi
+
+mkdir -p "$trio_dir"
+renderizar_resume_prompt > "$resume_file"
+
+# Asegurar sesión/workspace en herdr y reemplazar o crear el panel del rol objetivo
+[[ -n "$herdr_session" ]] && trio_asegurar_sesion_herdr
+
+ws_id="$ws_id_fleet"
+if [[ -z "$ws_id" ]]; then
+    ws_json="$(trio_herdr workspace list 2>/dev/null || true)"
+    ws_id="$(jq -r --arg lbl "$ws_label" '.result.workspaces[]? | select(.label == $lbl) | .workspace_id' <<<"$ws_json" | head -n 1)"
+fi
+
+target_pane=""
+if [[ -n "$ws_id" ]]; then
+    tabs_json="$(trio_herdr tab list --workspace "$ws_id")"
+    panes_json="$(trio_herdr pane list --workspace "$ws_id")"
+    target_tab="$(jq -r --arg lbl "$target_role" '.result.tabs[]? | select(.label == $lbl) | .tab_id' <<<"$tabs_json" | head -n 1)"
+    if [[ -n "$target_tab" ]]; then
+        old_pane="$(jq -r --arg t "$target_tab" '.result.panes[]? | select(.tab_id == $t) | .pane_id' <<<"$panes_json" | head -n 1)"
+        new_pane_json="$(trio_herdr pane create --tab "$target_tab" --cwd "$work_dir")"
+        target_pane="$(jq -r '.result.pane.pane_id // .result.pane_id // empty' <<<"$new_pane_json" 2>/dev/null || true)"
+        if [[ -n "$target_pane" && -n "$old_pane" && "$target_pane" != "$old_pane" ]]; then
+            trio_herdr pane close "$old_pane" >/dev/null 2>&1 || true
+        fi
+        [[ -n "$target_pane" ]] || target_pane="$old_pane"
+    else
+        tab_create="$(trio_herdr tab create --workspace "$ws_id" --cwd "$work_dir" --label "$target_role" --no-focus)"
+        target_pane="$(jq -r '.result.root_pane.pane_id // empty' <<<"$tab_create" 2>/dev/null || true)"
+    fi
+else
+    create_json="$(trio_herdr workspace create --cwd "$work_dir" --label "$ws_label" --no-focus)"
+    if jq -e '.error' >/dev/null 2>&1 <<<"$create_json"; then
+        err_msg="$(jq -r '.error.message // .error.code' <<<"$create_json")"
+        print_error "Error al crear el workspace en herdr: $err_msg" >&2
+        exit 1
+    fi
+    ws_id="$(jq -r '.result.workspace.workspace_id' <<<"$create_json")"
+    target_tab="$(jq -r '.result.tab.tab_id' <<<"$create_json")"
+    target_pane="$(jq -r '.result.root_pane.pane_id' <<<"$create_json")"
+    trio_herdr tab rename "$target_tab" "$target_role" >/dev/null
+fi
+
+[[ -n "$target_pane" ]] && trio_herdr pane rename "$target_pane" "$pane_title" >/dev/null
+
+if [[ "${TRIO_PANE_SETTLE_SECS:-0.3}" != "0" ]]; then
+    sleep "${TRIO_PANE_SETTLE_SECS:-0.3}"
+fi
+
+start_out=""
+if ! start_out="$(trio_herdr agent start "$agent_target" --kind "$target_kind" --pane "$target_pane" -- "${resume_agent_args[@]}" 2>&1)"; then
+    if ! jq -e '.error.code == "agent_not_ready" or .error.code == "timeout"' >/dev/null 2>&1 <<<"$start_out"; then
+        print_error "no se pudo iniciar ${agent_target} (${target_kind}) en ${target_pane}: ${start_out}" >&2
+        exit 1
+    fi
+fi
+
+if [[ "$target_kind" == "agy" ]]; then
+    prompt_target="$agent_target"
+    if [[ -n "$target_pane" ]] && ! trio_herdr agent get "$agent_target" >/dev/null 2>&1; then
+        prompt_target="$target_pane"
+    fi
+    if esperar_agente_listo "$agent_target" "$target_pane"; then
+        trio_herdr agent prompt "$prompt_target" "Lee y segui al pie de la letra las instrucciones de relevo del archivo ${resume_file}" >/dev/null
+    else
+        print_warn "${agent_target} no quedó listo a tiempo; el prompt quedó en ${resume_file}." >&2
+    fi
+fi
+
+"$trio_status" "${status_session_args[@]}" "$trio_dir" en-curso "$paso_actual" \
+    --owner "$agent_target" --heartbeat "$(date --iso-8601=seconds)" --lease --worktree "$wt_dir" --note "relevo (${target_role_upper})"
+
+print_success "Relevo lanzado para ${trio_clave}: ${agent_target} (${target_kind}) en workspace ${ws_id} (${target_pane})."
