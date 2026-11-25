@@ -8,6 +8,8 @@ module_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$module_dir/../helper/set_variable.sh"
 # shellcheck disable=SC1091
 source "$TRIO_RUNTIME_DIR/lib/presentation.sh"
+# shellcheck disable=SC1091
+source "$TRIO_RUNTIME_DIR/lib/trio_config.sh"
 
 show_status_help() {
   print_section "Trio Status Usage"
@@ -16,8 +18,8 @@ show_status_help() {
                    [--pr <url>] [--head <sha>] [--merge-sha <sha>]
                    [--merge-danger <texto>] [--session <nombre>]
                    [--owner <agente>] [--branch <rama>] [--last-commit <sha>]
-                   [--note <texto>] [--heartbeat <iso8601>] [--worktree <ruta>]
-                   <trio_dir> <estado> <paso>
+                   [--note <texto>] [--heartbeat <iso8601>] [--lease]
+                   [--worktree <ruta>] <trio_dir> <estado> <paso>
 
   Esquema de status.json (las claves no indicadas se conservan del archivo previo):
     ticket        id del ticket (nombre de <trio_dir>)
@@ -34,8 +36,9 @@ show_status_help() {
     branch        rama de trabajo actual (opcional)
     last_commit   último commit observado (opcional)
     note          nota corta de progreso (opcional)
-    heartbeat_at  timestamp ISO 8601 del último heartbeat (opcional)
-    worktree      ruta del worktree activo (opcional)
+    heartbeat_at      timestamp ISO 8601 del último heartbeat (opcional)
+    lease_expires_at  timestamp ISO 8601 de expiración del lease (opcional)
+    worktree          ruta del worktree activo (opcional)
     cola          últimas líneas del panel del agente que falló (opcional)
 HELP_EOF
 }
@@ -55,6 +58,7 @@ branch=""
 last_commit=""
 note=""
 heartbeat_at=""
+lease=0
 worktree=""
 pos=()
 while [[ $# -gt 0 ]]; do
@@ -74,6 +78,7 @@ while [[ $# -gt 0 ]]; do
         --last-commit) last_commit="${2:?}"; shift 2 ;;
         --note) note="${2:?}"; shift 2 ;;
         --heartbeat) heartbeat_at="${2:?}"; shift 2 ;;
+        --lease) lease=1; shift ;;
         --worktree) worktree="${2:?}"; shift 2 ;;
         -h|--help) show_status_help; exit 0 ;;
         *) pos+=("$1"); shift ;;
@@ -100,12 +105,33 @@ if [[ -n "$cola_de" ]] && command -v herdr >/dev/null 2>&1; then
     fi
 fi
 
+ts_now="$(date --iso-8601=seconds)"
+lease_expires_at=""
+if [[ "$lease" -eq 1 || -n "$heartbeat_at" ]]; then
+    env_lease_minutes="${TRIO_LEASE_MINUTES:-}"
+    # shellcheck disable=SC2034 # Used by trio_cargar_config.
+    if project_dir="$(cd "$(dirname "$trio_dir")/.." 2>/dev/null && pwd)"; then
+        :
+    else
+        project_dir="$(dirname "$trio_dir")"
+    fi
+    trio_cargar_config
+    effective_lease_minutes="${env_lease_minutes:-${TRIO_LEASE_MINUTES}}"
+    [[ "$effective_lease_minutes" =~ ^[0-9]+$ ]] || {
+        print_error "TRIO_LEASE_MINUTES inválido '$effective_lease_minutes'." >&2
+        exit 1
+    }
+    lease_base="${heartbeat_at:-$ts_now}"
+    lease_expires_at="$(date -d "${lease_base} + ${effective_lease_minutes} minutes" --iso-8601=seconds)"
+fi
+
 json="$(jq -n --argjson p "$previo" --arg ticket "$(basename "$trio_dir")" --arg estado "$estado" \
-    --arg paso "$paso" --arg error "$error" --arg ts "$(date --iso-8601=seconds)" \
+    --arg paso "$paso" --arg error "$error" --arg ts "$ts_now" \
     --arg pr "$pr" --arg head "$head" --arg merge_sha "$merge_sha" --arg merge_danger "$merge_danger" \
     --arg session "$session" --arg cola "$cola" --arg intentos "$intentos" \
     --arg owner "$owner" --arg branch "$branch" --arg last_commit "$last_commit" \
-    --arg note "$note" --arg heartbeat_at "$heartbeat_at" --arg worktree "$worktree" '
+    --arg note "$note" --arg heartbeat_at "$heartbeat_at" --arg lease_expires_at "$lease_expires_at" \
+    --arg worktree "$worktree" '
     $p + {ticket: $ticket, estado: $estado, paso: $paso, error: $error, timestamp: $ts}
     + (if $pr != "" then {pr: $pr} else {} end)
     + (if $head != "" then {head: $head} else {} end)
@@ -118,6 +144,7 @@ json="$(jq -n --argjson p "$previo" --arg ticket "$(basename "$trio_dir")" --arg
     + (if $last_commit != "" then {last_commit: $last_commit} else {} end)
     + (if $note != "" then {note: $note} else {} end)
     + (if $heartbeat_at != "" then {heartbeat_at: $heartbeat_at} else {} end)
+    + (if $lease_expires_at != "" then {lease_expires_at: $lease_expires_at} else {} end)
     + (if $worktree != "" then {worktree: $worktree} else {} end)
     + (if $cola != "" then {cola: $cola} else {} end)
     | del(.fase)')"
