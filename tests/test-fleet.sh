@@ -196,4 +196,217 @@ grep -qx -- '--activos' <<<"$comp_out" || fallo "completion de fleet debe inclui
 grep -qx -- '--json' <<<"$comp_out" || fallo "completion de fleet debe incluir --json: $comp_out"
 grep -qx -- 'HR-DEMO' <<<"$comp_out" || fallo "completion de fleet debe incluir HR-DEMO: $comp_out"
 
+# 10. Cruce herdr + worktree git: vivo, sin-cuota, colgado, muerto, trabado y step inferido.
+pj_real="$tmp/HR-REAL"
+mkdir -p "$pj_real/.trio/ravn-trio-20" \
+  "$pj_real/.trio/ravn-trio-21" \
+  "$pj_real/.trio/ravn-trio-22" \
+  "$pj_real/.trio/ravn-trio-23" \
+  "$pj_real/.trio/ravn-trio-24"
+git init -q "$pj_real"
+cat > "$pj_real/proyecto.yml" <<'EOF'
+proyecto: HR-REAL
+EOF
+
+# Worktree git temporal con 1 commit adelante de main para ravn-trio-20 (vivo + step=commits)
+wt_base="$tmp/wt-origin"
+git init -q --initial-branch=main "$wt_base"
+git -C "$wt_base" config user.name "Test"
+git -C "$wt_base" config user.email "test@example.com"
+echo "init" > "$wt_base/a.txt"
+git -C "$wt_base" add a.txt && git -C "$wt_base" commit -qm "init"
+
+wt_20="$tmp/wt-20"
+git clone -q "$wt_base" "$wt_20"
+git -C "$wt_20" config user.name "Test"
+git -C "$wt_20" config user.email "test@example.com"
+git -C "$wt_20" checkout -qb "issue/20-vivo"
+echo "cambio" > "$wt_20/b.txt"
+git -C "$wt_20" add b.txt && git -C "$wt_20" commit -qm "feat: avance"
+
+# Worktree sin commits extra para ravn-trio-21 (step=worktree)
+wt_21="$tmp/wt-21"
+git clone -q "$wt_base" "$wt_21"
+git -C "$wt_21" checkout -qb "issue/21-cuota"
+
+now_iso="$(date --iso-8601=seconds)"
+old_iso="2020-01-01T00:00:00-06:00"
+
+cat > "$pj_real/.trio/ravn-trio-20/status.json" <<EOF
+{"ticket":"ravn-trio-20","estado":"en-curso","paso":"wk","owner":"wk-ravn-trio-20","note":"avanzando","heartbeat_at":"$now_iso","worktree":"$wt_20","timestamp":"$now_iso"}
+EOF
+cat > "$pj_real/.trio/ravn-trio-21/status.json" <<EOF
+{"ticket":"ravn-trio-21","estado":"en-curso","paso":"wk","owner":"wk-ravn-trio-21","heartbeat_at":"$now_iso","worktree":"$wt_21","timestamp":"$now_iso"}
+EOF
+cat > "$pj_real/.trio/ravn-trio-22/status.json" <<EOF
+{"ticket":"ravn-trio-22","estado":"en-curso","paso":"wk","owner":"wk-ravn-trio-22","heartbeat_at":"$old_iso","timestamp":"$old_iso"}
+EOF
+cat > "$pj_real/.trio/ravn-trio-23/status.json" <<EOF
+{"ticket":"ravn-trio-23","estado":"en-curso","paso":"rv","owner":"rv-ravn-trio-23","heartbeat_at":"$now_iso","timestamp":"$now_iso"}
+EOF
+cat > "$pj_real/.trio/ravn-trio-24/status.json" <<EOF
+{"ticket":"ravn-trio-24","estado":"blocked","paso":"wk","note":"falta token","heartbeat_at":"$now_iso","timestamp":"$now_iso"}
+EOF
+
+mkdir -p "$tmp/bin_herdr_real"
+cat > "$tmp/bin_herdr_real/herdr" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "workspace list")
+    cat <<'JSON'
+{"id":"cli:workspace:list","result":{"workspaces":[
+  {"workspace_id":"w20","label":"trio HR-REAL/ravn-trio#20"},
+  {"workspace_id":"w21","label":"trio HR-REAL/ravn-trio#21"},
+  {"workspace_id":"w22","label":"trio HR-REAL/ravn-trio#22"},
+  {"workspace_id":"w23","label":"trio HR-REAL/ravn-trio#23"},
+  {"workspace_id":"w24","label":"trio HR-REAL/ravn-trio#24"}
+]}}
+JSON
+    ;;
+  "agent list")
+    cat <<'JSON'
+{"id":"cli:agent:list","result":{"agents":[
+  {"name":"pm-ravn-trio-20","agent_status":"idle","workspace_id":"w20"},
+  {"name":"wk-ravn-trio-20","agent_status":"running","workspace_id":"w20"},
+  {"name":"pm-ravn-trio-21","agent_status":"idle","workspace_id":"w21"},
+  {"name":"wk-ravn-trio-21","agent_status":"running","workspace_id":"w21"},
+  {"name":"pm-ravn-trio-22","agent_status":"idle","workspace_id":"w22"},
+  {"name":"wk-ravn-trio-22","agent_status":"running","workspace_id":"w22"},
+  {"name":"pm-ravn-trio-23","agent_status":"idle","workspace_id":"w23"},
+  {"name":"pm-ravn-trio-24","agent_status":"idle","workspace_id":"w24"}
+]}}
+JSON
+    ;;
+  "agent get")
+    case "${3:-}" in
+      wk-ravn-trio-20) echo '{"result":{"agent":{"name":"wk-ravn-trio-20","agent_status":"running","workspace_id":"w20"}}}' ;;
+      wk-ravn-trio-21) echo '{"result":{"agent":{"name":"wk-ravn-trio-21","agent_status":"running","workspace_id":"w21"}}}' ;;
+      wk-ravn-trio-22) echo '{"result":{"agent":{"name":"wk-ravn-trio-22","agent_status":"running","workspace_id":"w22"}}}' ;;
+      rv-ravn-trio-23) echo '{"result":{"agent":{"name":"rv-ravn-trio-23","agent_status":"exited","workspace_id":"w23"}}}' ;;
+      pm-ravn-trio-*)  echo '{"result":{"agent":{"name":"'"${3:-}"'","agent_status":"idle","workspace_id":"w20"}}}' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "agent read")
+    case "${3:-}" in
+      wk-ravn-trio-21) echo "Error 429: rate limit exceeded, please retry later" ;;
+      *) echo "working normally..." ;;
+    esac
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+EOF
+chmod +x "$tmp/bin_herdr_real/herdr"
+
+json_real="$(PATH="$tmp/bin_herdr_real:$PATH" "$aqui/pj-trio" fleet "$pj_real" --json)"
+jq -e '
+  (.[] | select(.clave == "ravn-trio-20") |
+    .estado_real == "vivo" and .step == "commits" and .owner == "wk-ravn-trio-20" and
+    .note == "avanzando" and .heartbeat_at != "")
+  and
+  (.[] | select(.clave == "ravn-trio-21") |
+    .estado_real == "sin-cuota" and .step == "worktree")
+  and
+  (.[] | select(.clave == "ravn-trio-22") |
+    .estado_real == "colgado")
+  and
+  (.[] | select(.clave == "ravn-trio-23") |
+    .estado_real == "muerto")
+  and
+  (.[] | select(.clave == "ravn-trio-24") |
+    .estado_real == "trabado" and .note == "falta token")
+' <<<"$json_real" >/dev/null || fallo "estado_real o step incorrectos en --json: $json_real"
+
+tabla_real="$(PATH="$tmp/bin_herdr_real:$PATH" "$aqui/pj-trio" fleet "$pj_real")"
+grep -q 'sin-cuota' <<<"$tabla_real" || fallo "tabla no muestra estado_real sin-cuota: $tabla_real"
+grep -q 'commits' <<<"$tabla_real" || fallo "tabla no muestra step commits: $tabla_real"
+
+# 11. Cruce GitHub (gh): pr-abierto, en-review, mergeado -> terminado, y --no-gh / hecho omiten gh.
+pj_gh="$tmp/HR-GH"
+mkdir -p \
+  "$pj_gh/.trio/ravn-trio-30" \
+  "$pj_gh/.trio/ravn-trio-31" \
+  "$pj_gh/.trio/ravn-trio-32" \
+  "$pj_gh/.trio/ravn-trio-33" \
+  "$pj_gh/.trio/ravn-trio-34"
+git init -q "$pj_gh"
+git -C "$pj_gh" remote add origin "https://github.com/o/HR-GH.git"
+cat > "$pj_gh/proyecto.yml" <<'EOF'
+proyecto: HR-GH
+EOF
+
+cat > "$pj_gh/.trio/ravn-trio-30/status.json" <<EOF
+{"ticket":"ravn-trio-30","estado":"en-curso","paso":"wk","pr":"https://github.com/o/ravn-trio/pull/30","timestamp":"$now_iso"}
+EOF
+cat > "$pj_gh/.trio/ravn-trio-31/status.json" <<EOF
+{"ticket":"ravn-trio-31","estado":"en-curso","paso":"rv","pr":"https://github.com/o/ravn-trio/pull/31","timestamp":"$now_iso"}
+EOF
+cat > "$pj_gh/.trio/ravn-trio-32/status.json" <<EOF
+{"ticket":"ravn-trio-32","estado":"en-curso","paso":"merge","pr":"https://github.com/o/ravn-trio/pull/32","timestamp":"$now_iso"}
+EOF
+cat > "$pj_gh/.trio/ravn-trio-33/status.json" <<EOF
+{"ticket":"ravn-trio-33","estado":"hecho","paso":"cierre","pr":"https://github.com/o/ravn-trio/pull/33","timestamp":"$now_iso"}
+EOF
+cat > "$pj_gh/.trio/ravn-trio-34/status.json" <<EOF
+{"ticket":"ravn-trio-34","estado":"en-curso","paso":"merge","pr":"https://github.com/o/ravn-trio/pull/34","timestamp":"$now_iso"}
+EOF
+
+mkdir -p "$tmp/bin_gh"
+gh_log="$tmp/gh_calls.log"
+cat > "$tmp/bin_gh/gh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$gh_log"
+case "\${1:-} \${2:-}" in
+  "pr view")
+    case "\${3:-}" in
+      30) echo '{"state":"OPEN","reviewDecision":"","statusCheckRollup":[]}' ;;
+      31) echo '{"state":"OPEN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[]}' ;;
+      32|34) echo '{"state":"MERGED","reviewDecision":"APPROVED","statusCheckRollup":[]}' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "issue view")
+    case "\${3:-}" in
+      32) echo '{"state":"CLOSED"}' ;;
+      *) echo '{"state":"OPEN"}' ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$tmp/bin_gh/gh"
+
+: > "$gh_log"
+json_gh="$(PATH="$tmp/bin_gh:$tmp/bin_noherdr" "$aqui/pj-trio" fleet "$pj_gh" --json)"
+jq -e '
+  (.[] | select(.clave == "ravn-trio-30") | .step == "pr-abierto")
+  and
+  (.[] | select(.clave == "ravn-trio-31") | .step == "en-review")
+  and
+  (.[] | select(.clave == "ravn-trio-32") | .step == "mergeado" and .estado_real == "terminado")
+  and
+  (.[] | select(.clave == "ravn-trio-34") | .step == "mergeado" and .estado_real != "terminado")
+' <<<"$json_gh" >/dev/null || fallo "cruce gh incorrecto: $json_gh"
+
+if grep -qE '(^| )33( |$)' "$gh_log"; then
+  fallo "no debía consultar gh para ticket hecho (33): $(cat "$gh_log")"
+fi
+
+: > "$gh_log"
+PATH="$tmp/bin_gh:$tmp/bin_noherdr" "$aqui/pj-trio" fleet "$pj_gh" --no-gh --json >/dev/null
+if [[ -s "$gh_log" ]]; then
+  fallo "--no-gh no debía invocar gh: $(cat "$gh_log")"
+fi
+
+comp_gh="$(PJ_TRIO_ROOTS="$tmp" bash -c '
+  source "'"$aqui"'/runtime/completion/pj-trio.bash"
+  COMP_WORDS=(pj-trio fleet "")
+  COMP_CWORD=2
+  _pj_trio_completion
+  printf "%s\n" "${COMPREPLY[@]}"
+')"
+grep -qx -- '--no-gh' <<<"$comp_gh" || fallo "completion de fleet debe incluir --no-gh: $comp_gh"
+
 echo "OK fleet"

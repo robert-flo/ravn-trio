@@ -11,12 +11,14 @@ PROJECT_DIR="$TRIO_RUNTIME_DIR"
 # shellcheck disable=SC1091
 source "$PROJECT_DIR/lib/presentation.sh"
 # shellcheck disable=SC1091
+source "$PROJECT_DIR/lib/trio_config.sh"
+# shellcheck disable=SC1091
 source "$PROJECT_DIR/lib/trio_project.sh"
 
 show_fleet_help() {
   print_section "Fleet Status Usage"
   cat <<'HELP_EOF'
-  Uso: pj-trio fleet [<proyecto>] [--activos] [--json]
+  Uso: pj-trio fleet [<proyecto>] [--activos] [--json] [--no-gh]
 
   Argumentos:
     <proyecto>    Ruta o nombre del proyecto meta (pj-* / HR-*).
@@ -28,12 +30,14 @@ show_fleet_help() {
   Opciones:
     --activos     Muestra solo tríos con estado en-curso, needs-roberto o workspace abierto.
     --json        Imprime el resultado como array JSON.
+    --no-gh       Omite consultas a GitHub (gh) para modo rápido u offline.
     -h, --help    Muestra esta ayuda.
 HELP_EOF
 }
 
 activos=0
 json_out=0
+no_gh=0
 positional=()
 
 while [[ $# -gt 0 ]]; do
@@ -44,6 +48,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --json)
       json_out=1
+      shift
+      ;;
+    --no-gh)
+      no_gh=1
       shift
       ;;
     -h|--help)
@@ -74,6 +82,226 @@ repo_arg=""
 ticket=""
 export PJ_TRIO_NO_CLONE="${PJ_TRIO_NO_CLONE:-1}"
 trio_resolver_proyecto
+trio_cargar_config
+
+_fleet_iso_to_epoch() {
+  local ts="${1:-}"
+  [[ -n "$ts" ]] || { echo 0; return 0; }
+  date -d "$ts" +%s 2>/dev/null || echo 0
+}
+
+_fleet_resolver_worktree() {
+  local wt_hint="$1" pj_dir="$2" r_name="$3" t_num="$4"
+  if [[ -n "$wt_hint" && -d "$wt_hint" ]] && git -C "$wt_hint" rev-parse --git-dir >/dev/null 2>&1; then
+    printf '%s\n' "$wt_hint"
+    return 0
+  fi
+  [[ -n "$t_num" ]] || return 0
+  local -a bases=()
+  if [[ -n "$r_name" ]]; then
+    bases=("$pj_dir/repos/$r_name" "${WORKTREES_HOME:-/z/repos}/$r_name")
+  else
+    local sub
+    for sub in "$pj_dir/repos"/* "${WORKTREES_HOME:-/z/repos}"/*; do
+      [[ -d "$sub" ]] && bases+=("$sub")
+    done
+  fi
+  local base d
+  for base in "${bases[@]}"; do
+    [[ -d "$base" ]] || continue
+    for d in "$base/${t_num}" "$base/${t_num}-"*; do
+      [[ -d "$d" ]] || continue
+      if git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+        printf '%s\n' "$d"
+        return 0
+      fi
+    done
+  done
+}
+
+_fleet_inspeccionar_git() {
+  local wt="$1"
+  wt_branch=""
+  wt_last_commit=""
+  wt_last_commit_epoch=0
+  wt_commits_ahead=0
+  [[ -n "$wt" ]] || return 0
+
+  wt_branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  wt_last_commit="$(git -C "$wt" log -1 --format=%H 2>/dev/null || true)"
+  wt_last_commit_epoch="$(git -C "$wt" log -1 --format=%ct 2>/dev/null || echo 0)"
+  [[ "$wt_last_commit_epoch" =~ ^[0-9]+$ ]] || wt_last_commit_epoch=0
+
+  local base_ref="" cand
+  for cand in origin/HEAD origin/main origin/master main master; do
+    if git -C "$wt" rev-parse --verify --quiet "$cand" >/dev/null 2>&1; then
+      base_ref="$cand"
+      break
+    fi
+  done
+  if [[ -n "$base_ref" ]]; then
+    wt_commits_ahead="$(git -C "$wt" rev-list --count "${base_ref}..HEAD" 2>/dev/null || echo 0)"
+    [[ "$wt_commits_ahead" =~ ^[0-9]+$ ]] || wt_commits_ahead=0
+  fi
+}
+
+_fleet_herdr_cmd() {
+  local sess="${1:-}"
+  shift
+  if [[ -n "$sess" ]]; then
+    herdr --session "$sess" "$@"
+  else
+    herdr "$@"
+  fi
+}
+
+_fleet_inspeccionar_agente_herdr() {
+  local paso="$1" owner_hint="$2" ws_id="$3" sess="$4"
+  active_agent_target=""
+  active_herdr_status="unavailable"
+  quota_hit=0
+
+  local rol="pm"
+  case "$paso" in
+    wk) rol="wk" ;;
+    rv) rol="rv" ;;
+    os) rol="os" ;;
+    *) rol="pm" ;;
+  esac
+
+  local -a candidates=()
+  candidates+=("$(nombre_agente "$rol")")
+  if [[ "$rol" == "pm" || "$rol" == "wk" ]]; then
+    candidates+=("$(nombre_agente os)")
+  fi
+  [[ -n "$owner_hint" ]] && candidates+=("$owner_hint")
+
+  local cand ag_json st="" target="" pane_id=""
+  for cand in "${candidates[@]}"; do
+    [[ -n "$cand" ]] || continue
+    ag_json="$(_fleet_herdr_cmd "$sess" agent get "$cand" 2>/dev/null || true)"
+    if [[ -n "$ag_json" ]] && jq -e '.result.agent' >/dev/null 2>&1 <<<"$ag_json"; then
+      target="$cand"
+      st="$(jq -r '.result.agent.agent_status // "unknown"' <<<"$ag_json")"
+      pane_id="$(jq -r '.result.agent.pane_id // ""' <<<"$ag_json")"
+      break
+    fi
+  done
+
+  if [[ -z "$target" && -n "$ws_id" && -n "$agent_list_cache" ]]; then
+    local ag_match
+    ag_match="$(jq -c --arg ws "$ws_id" --arg r "$rol" '
+      [.result.agents[]? | select(.workspace_id == $ws and (((.name // "") | startswith($r + "-")) or ((.name // "") | startswith("os-"))))] | .[0] // empty
+    ' <<<"$agent_list_cache" 2>/dev/null || true)"
+    if [[ -n "$ag_match" ]]; then
+      target="$(jq -r '(if (.name // "") != "" then .name else (.pane_id // "") end)' <<<"$ag_match")"
+      st="$(jq -r '.agent_status // "unknown"' <<<"$ag_match")"
+      pane_id="$(jq -r '.pane_id // ""' <<<"$ag_match")"
+    fi
+  fi
+
+  active_agent_target="$target"
+  [[ -n "$st" ]] && active_herdr_status="$st"
+
+  local tail_out=""
+  if [[ -n "$target" ]]; then
+    tail_out="$(_fleet_herdr_cmd "$sess" agent read "$target" 2>/dev/null | tail -n 40 || true)"
+  fi
+  if [[ -z "$tail_out" && -n "$pane_id" ]]; then
+    tail_out="$(_fleet_herdr_cmd "$sess" pane read "$pane_id" 2>/dev/null | tail -n 40 || true)"
+  fi
+  if [[ -n "$tail_out" && -n "${TRIO_QUOTA_PATTERNS:-}" ]] && grep -iEq "$TRIO_QUOTA_PATTERNS" <<<"$tail_out"; then
+    quota_hit=1
+  fi
+}
+
+_fleet_inspeccionar_gh() {
+  local pr_url="$1" branch="$2" ticket_num="$3" pj_dir="$4" wt_dir="$5"
+  gh_pr_url="$pr_url"
+  gh_pr_state=""
+  gh_review_decision=""
+  gh_issue_state=""
+
+  local pr_repo="" pr_num="" pr_json=""
+  if [[ "$pr_url" =~ ^https?://github\.com/([^/]+/[^/]+)/pull/([0-9]+) ]]; then
+    pr_repo="${BASH_REMATCH[1]}"
+    pr_num="${BASH_REMATCH[2]}"
+    pr_json="$(gh pr view "$pr_num" -R "$pr_repo" --json state,reviewDecision,statusCheckRollup 2>/dev/null || true)"
+  elif [[ -n "$branch" ]]; then
+    [[ -n "$wt_dir" ]] && pr_repo="$(trio_slug_remoto "$wt_dir")"
+    [[ -n "$pr_repo" ]] || pr_repo="$(trio_slug_remoto "$pj_dir")"
+    if [[ -n "$pr_repo" ]]; then
+      pr_json="$(gh pr list -R "$pr_repo" --head "$branch" --state all --limit 1 --json url,state,reviewDecision,statusCheckRollup 2>/dev/null | jq -c '.[0] // empty' 2>/dev/null || true)"
+    fi
+  fi
+
+  if [[ -n "$pr_json" ]] && jq -e '.state' >/dev/null 2>&1 <<<"$pr_json"; then
+    gh_pr_state="$(jq -r '.state // ""' <<<"$pr_json")"
+    gh_review_decision="$(jq -r '.reviewDecision // ""' <<<"$pr_json")"
+    local discovered_url
+    discovered_url="$(jq -r '.url // ""' <<<"$pr_json")"
+    [[ -z "$gh_pr_url" && -n "$discovered_url" ]] && gh_pr_url="$discovered_url"
+  fi
+
+  local issue_repo=""
+  issue_repo="$(trio_slug_remoto "$pj_dir")"
+  [[ -n "$issue_repo" ]] || issue_repo="$pr_repo"
+  if [[ -n "$issue_repo" && "$ticket_num" =~ ^[0-9]+$ ]]; then
+    local issue_json
+    issue_json="$(gh issue view "$ticket_num" -R "$issue_repo" --json state 2>/dev/null || true)"
+    if [[ -n "$issue_json" ]]; then
+      gh_issue_state="$(jq -r '.state // ""' <<<"$issue_json")"
+    fi
+  fi
+}
+
+_fleet_calcular_estado_y_step() {
+  local estado="$1" paso="$2" herdr_ok="$3" ws_id="$4" active_st="$5" quota="$6"
+  local now_ep="$7" hb_ep="$8" ts_ep="$9" wt_dir="${10}" wt_commit_ep="${11}" wt_ahead="${12}"
+
+  local latest_ep="$ts_ep"
+  (( hb_ep > latest_ep )) && latest_ep="$hb_ep"
+  (( wt_commit_ep > latest_ep )) && latest_ep="$wt_commit_ep"
+
+  local stale_secs=$(( ${TRIO_STALE_MINUTES:-15} * 60 ))
+  local alive_state="vivo"
+  if (( latest_ep > 0 && (now_ep - latest_ep) >= stale_secs )); then
+    alive_state="colgado"
+  fi
+
+  estado_real="unavailable"
+  if [[ "$quota" -eq 1 ]]; then
+    estado_real="sin-cuota"
+  elif [[ "$estado" == "blocked" || "$estado" == "needs-roberto" ]]; then
+    estado_real="trabado"
+  elif [[ "$estado" == "hecho" && ( "$herdr_ok" -eq 0 || -z "$ws_id" ) ]]; then
+    estado_real="terminado"
+  elif [[ "$herdr_ok" -eq 1 ]]; then
+    case "$active_st" in
+      running|busy|working|idle)
+        estado_real="$alive_state"
+        ;;
+      exited|dead|stopped|closed|cerrado|unavailable)
+        estado_real="muerto"
+        ;;
+      *)
+        if [[ -z "$ws_id" && "$estado" == "en-curso" ]]; then
+          estado_real="muerto"
+        else
+          estado_real="$alive_state"
+        fi
+        ;;
+    esac
+  fi
+
+  if (( wt_ahead > 0 )); then
+    inferred_step="commits"
+  elif [[ -n "$wt_dir" ]]; then
+    inferred_step="worktree"
+  else
+    inferred_step="${paso:-plan}"
+  fi
+}
 
 # Recolectar archivos status.json
 shopt -s nullglob
@@ -136,25 +364,98 @@ for status_file in "${status_files[@]}"; do
   fi
 
   estado="$(jq -r '.estado // ""' <<<"$raw_status")"
+  paso="$(jq -r '.paso // ""' <<<"$raw_status")"
   if [[ "$activos" -eq 1 ]]; then
     if [[ "$estado" != "en-curso" && "$estado" != "needs-roberto" && "$estado" != "blocked" && -z "$workspace_id" ]]; then
       continue
     fi
   fi
 
+  owner_hint="$(jq -r '.owner // ""' <<<"$raw_status")"
+  sess_hint="$(jq -r '.session // ""' <<<"$raw_status")"
+  wt_hint="$(jq -r '.worktree // ""' <<<"$raw_status")"
+  hb_hint="$(jq -r '.heartbeat_at // ""' <<<"$raw_status")"
+  ts_hint="$(jq -r '.timestamp // ""' <<<"$raw_status")"
+
+  active_agent_target=""
+  active_herdr_status="unavailable"
+  quota_hit=0
+  if [[ "$herdr_ok" -eq 1 ]]; then
+    _fleet_inspeccionar_agente_herdr "$paso" "$owner_hint" "$workspace_id" "$sess_hint"
+  fi
+
+  wt_dir="$(_fleet_resolver_worktree "$wt_hint" "$project_dir" "$repo_name" "$ticket")"
+  _fleet_inspeccionar_git "$wt_dir"
+
+  now_ep="$(date +%s)"
+  hb_ep="$(_fleet_iso_to_epoch "$hb_hint")"
+  ts_ep="$(_fleet_iso_to_epoch "$ts_hint")"
+
+  estado_real=""
+  inferred_step=""
+  _fleet_calcular_estado_y_step \
+    "$estado" "$paso" "$herdr_ok" "$workspace_id" "$active_herdr_status" "$quota_hit" \
+    "$now_ep" "$hb_ep" "$ts_ep" "$wt_dir" "$wt_last_commit_epoch" "$wt_commits_ahead"
+
+  pr_hint="$(jq -r '.pr // ""' <<<"$raw_status")"
+  branch_hint="$(jq -r '.branch // ""' <<<"$raw_status")"
+  effective_branch="${wt_branch:-$branch_hint}"
+  effective_pr="$pr_hint"
+
+  if [[ "$no_gh" -eq 0 && "$estado" != "hecho" ]] && command -v gh >/dev/null 2>&1; then
+    gh_pr_url=""
+    gh_pr_state=""
+    gh_review_decision=""
+    gh_issue_state=""
+    _fleet_inspeccionar_gh "$pr_hint" "$effective_branch" "$ticket" "$project_dir" "$wt_dir"
+    [[ -n "$gh_pr_url" ]] && effective_pr="$gh_pr_url"
+    case "$gh_pr_state" in
+      MERGED)
+        inferred_step="mergeado"
+        if [[ "$gh_issue_state" == "CLOSED" ]]; then
+          estado_real="terminado"
+        fi
+        ;;
+      OPEN)
+        if [[ "$paso" == "rv" || "$gh_review_decision" == "REVIEW_REQUIRED" || "$gh_review_decision" == "CHANGES_REQUESTED" || "$gh_review_decision" == "APPROVED" ]]; then
+          inferred_step="en-review"
+        else
+          inferred_step="pr-abierto"
+        fi
+        ;;
+    esac
+  fi
+
+  effective_owner="${active_agent_target:-$owner_hint}"
+
   item="$(jq -n \
     --argjson s "$raw_status" \
     --arg clave "$clave" \
     --arg pm_status "$pm_herdr_status" \
     --arg ws_id "$workspace_id" \
+    --arg estado_real "$estado_real" \
+    --arg step "$inferred_step" \
+    --arg owner "$effective_owner" \
+    --arg worktree "$wt_dir" \
+    --arg branch "$wt_branch" \
+    --arg last_commit "$wt_last_commit" \
+    --arg pr "$effective_pr" \
     '{
       clave: $clave,
       ticket: ($s.ticket // $clave),
       estado: ($s.estado // ""),
+      estado_real: $estado_real,
       paso: ($s.paso // ""),
+      step: $step,
+      owner: $owner,
       pm_herdr_status: $pm_status,
       workspace_id: $ws_id,
-      pr: ($s.pr // ""),
+      heartbeat_at: ($s.heartbeat_at // ""),
+      note: ($s.note // ""),
+      worktree: (if $worktree != "" then $worktree else ($s.worktree // "") end),
+      branch: (if $branch != "" then $branch else ($s.branch // "") end),
+      last_commit: (if $last_commit != "" then $last_commit else ($s.last_commit // "") end),
+      pr: (if $pr != "" then $pr else ($s.pr // "") end),
       head: ($s.head // ""),
       merge_danger: ($s.merge_danger // ""),
       timestamp: ($s.timestamp // "")
@@ -180,20 +481,21 @@ if [[ "$herdr_ok" -eq 0 ]]; then
   print_warn "herdr no disponible; pm_herdr_status=unavailable."
 fi
 
-printf "  %-18s %-14s %-8s %-12s %-5s %-16s %s\n" \
-  "CLAVE" "ESTADO" "PASO" "PM" "WS" "DANGER" "PR"
-printf "  %-18s %-14s %-8s %-12s %-5s %-16s %s\n" \
-  "------------------" "--------------" "--------" "------------" "-----" "----------------" "--"
+printf "  %-18s %-12s %-10s %-16s %-5s %-16s %-22s %s\n" \
+  "CLAVE" "REAL" "STEP" "OWNER" "WS" "DANGER" "NOTE" "PR"
+printf "  %-18s %-12s %-10s %-16s %-5s %-16s %-22s %s\n" \
+  "------------------" "------------" "----------" "----------------" "-----" "----------------" "----------------------" "--"
 
-while IFS=$'\t' read -r c_clave c_estado c_paso c_pm c_ws c_danger c_pr; do
-  printf "  %-18s %-14s %-8s %-12s %-5s %-16s %s\n" \
-    "$c_clave" "$c_estado" "$c_paso" "$c_pm" "$c_ws" "$c_danger" "$c_pr"
+while IFS=$'\t' read -r c_clave c_real c_step c_owner c_ws c_danger c_note c_pr; do
+  printf "  %-18s %-12s %-10s %-16s %-5s %-16s %-22s %s\n" \
+    "$c_clave" "$c_real" "$c_step" "$c_owner" "$c_ws" "$c_danger" "$c_note" "$c_pr"
 done < <(jq -r '.[] | [
   (if .clave == "" then "-" else .clave end),
-  (if .estado == "" then "-" else .estado end),
-  (if .paso == "" then "-" else .paso end),
-  (if .pm_herdr_status == "" then "-" else .pm_herdr_status end),
+  (if .estado_real == "" then "-" else .estado_real end),
+  (if .step == "" then "-" else .step end),
+  (if .owner != "" then .owner elif .pm_herdr_status != "" then .pm_herdr_status else "-" end),
   (if .workspace_id == "" then "-" else .workspace_id end),
   (if .merge_danger == "" then "-" else .merge_danger end),
+  (if .note == "" then "-" else (.note | gsub("[\t\r\n]+"; " ") | .[0:22]) end),
   (if .pr == "" then "-" else .pr end)
 ] | @tsv' <<<"$items_json")

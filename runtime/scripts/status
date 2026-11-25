@@ -14,7 +14,10 @@ show_status_help() {
   cat << 'HELP_EOF'
   Uso: trio-status [--dry-run] [--notify] [--cola-de <agente>] [--error <texto>]
                    [--pr <url>] [--head <sha>] [--merge-sha <sha>]
-                   [--merge-danger <texto>] [--session <nombre>] <trio_dir> <estado> <paso>
+                   [--merge-danger <texto>] [--session <nombre>]
+                   [--owner <agente>] [--branch <rama>] [--last-commit <sha>]
+                   [--note <texto>] [--heartbeat <iso8601>] [--worktree <ruta>]
+                   <trio_dir> <estado> <paso>
 
   Esquema de status.json (las claves no indicadas se conservan del archivo previo):
     ticket        id del ticket (nombre de <trio_dir>)
@@ -27,6 +30,12 @@ show_status_help() {
     merge_sha     sha del commit de merge (opcional)
     merge_danger  evaluación Merge Danger del PR (opcional)
     session       sesión persistente de herdr del spec (opcional)
+    owner         agente/rol dueño actual (opcional)
+    branch        rama de trabajo actual (opcional)
+    last_commit   último commit observado (opcional)
+    note          nota corta de progreso (opcional)
+    heartbeat_at  timestamp ISO 8601 del último heartbeat (opcional)
+    worktree      ruta del worktree activo (opcional)
     cola          últimas líneas del panel del agente que falló (opcional)
 HELP_EOF
 }
@@ -41,6 +50,12 @@ merge_sha=""
 merge_danger=""
 intentos=""
 session=""
+owner=""
+branch=""
+last_commit=""
+note=""
+heartbeat_at=""
+worktree=""
 pos=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -54,6 +69,12 @@ while [[ $# -gt 0 ]]; do
         --merge-danger) merge_danger="${2:?}"; shift 2 ;;
         --intentos) intentos="${2:?}"; shift 2 ;;
         --session) session="${2:?}"; shift 2 ;;
+        --owner) owner="${2:?}"; shift 2 ;;
+        --branch) branch="${2:?}"; shift 2 ;;
+        --last-commit) last_commit="${2:?}"; shift 2 ;;
+        --note) note="${2:?}"; shift 2 ;;
+        --heartbeat) heartbeat_at="${2:?}"; shift 2 ;;
+        --worktree) worktree="${2:?}"; shift 2 ;;
         -h|--help) show_status_help; exit 0 ;;
         *) pos+=("$1"); shift ;;
     esac
@@ -82,7 +103,9 @@ fi
 json="$(jq -n --argjson p "$previo" --arg ticket "$(basename "$trio_dir")" --arg estado "$estado" \
     --arg paso "$paso" --arg error "$error" --arg ts "$(date --iso-8601=seconds)" \
     --arg pr "$pr" --arg head "$head" --arg merge_sha "$merge_sha" --arg merge_danger "$merge_danger" \
-    --arg session "$session" --arg cola "$cola" --arg intentos "$intentos" '
+    --arg session "$session" --arg cola "$cola" --arg intentos "$intentos" \
+    --arg owner "$owner" --arg branch "$branch" --arg last_commit "$last_commit" \
+    --arg note "$note" --arg heartbeat_at "$heartbeat_at" --arg worktree "$worktree" '
     $p + {ticket: $ticket, estado: $estado, paso: $paso, error: $error, timestamp: $ts}
     + (if $pr != "" then {pr: $pr} else {} end)
     + (if $head != "" then {head: $head} else {} end)
@@ -90,6 +113,12 @@ json="$(jq -n --argjson p "$previo" --arg ticket "$(basename "$trio_dir")" --arg
     + (if $merge_danger != "" then {merge_danger: $merge_danger} else {} end)
     + (if $session != "" then {session: $session} else {} end)
     + (if $intentos != "" then {intentos: ($intentos|tonumber)} else {} end)
+    + (if $owner != "" then {owner: $owner} else {} end)
+    + (if $branch != "" then {branch: $branch} else {} end)
+    + (if $last_commit != "" then {last_commit: $last_commit} else {} end)
+    + (if $note != "" then {note: $note} else {} end)
+    + (if $heartbeat_at != "" then {heartbeat_at: $heartbeat_at} else {} end)
+    + (if $worktree != "" then {worktree: $worktree} else {} end)
     + (if $cola != "" then {cola: $cola} else {} end)
     | del(.fase)')"
 

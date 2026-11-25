@@ -25,6 +25,43 @@ jq -e '.merge_sha == "def5678" and .merge_danger == "two-way / Low"' "$trio_dir/
 help_out="$("$status_cmd" --help)"
 grep -qF -- '--merge-sha' <<<"$help_out" || fallo "--help no documenta --merge-sha"
 grep -qF -- '--merge-danger' <<<"$help_out" || fallo "--help no documenta --merge-danger"
+for flag in --owner --branch --last-commit --note --heartbeat --worktree; do
+  grep -qF -- "$flag" <<<"$help_out" || fallo "--help no documenta $flag"
+done
+
+# 1b. Campos de observabilidad (--owner, --branch, --last-commit, --note, --heartbeat, --worktree)
+#     se escriben en status.json y se preservan en llamadas posteriores.
+trio_obs="$tmp/trio-obs"
+"$status_cmd" "$trio_obs" en-curso wk \
+  --owner "wk-ravn-trio-225" \
+  --branch "issue/225-trio-status-conf" \
+  --last-commit "1234567" \
+  --note "corriendo tests" \
+  --heartbeat "2026-11-24T12:00:00-06:00" \
+  --worktree "/z/repos/ravn-trio/225-trio-status-conf"
+
+jq -e '
+  .estado == "en-curso" and .paso == "wk" and
+  .owner == "wk-ravn-trio-225" and
+  .branch == "issue/225-trio-status-conf" and
+  .last_commit == "1234567" and
+  .note == "corriendo tests" and
+  .heartbeat_at == "2026-11-24T12:00:00-06:00" and
+  .worktree == "/z/repos/ravn-trio/225-trio-status-conf"
+' "$trio_obs/status.json" >/dev/null \
+  || fallo "campos de observabilidad no se escribieron en status.json: $(cat "$trio_obs/status.json")"
+
+"$status_cmd" "$trio_obs" en-curso rv
+jq -e '
+  .estado == "en-curso" and .paso == "rv" and
+  .owner == "wk-ravn-trio-225" and
+  .branch == "issue/225-trio-status-conf" and
+  .last_commit == "1234567" and
+  .note == "corriendo tests" and
+  .heartbeat_at == "2026-11-24T12:00:00-06:00" and
+  .worktree == "/z/repos/ravn-trio/225-trio-status-conf"
+' "$trio_obs/status.json" >/dev/null \
+  || fallo "campos de observabilidad no se preservaron en llamada posterior: $(cat "$trio_obs/status.json")"
 
 # 2. --notify usa herdr notification show con el --sound según el estado.
 mkdir -p "$tmp/bin_ok" "$tmp/bin_fail" "$tmp/bin_noherdr"

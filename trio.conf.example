@@ -20,3 +20,9 @@ TRIO_GIT_EMAIL="25asab015@ujmd.edu.sv"
 # Target de `herdr integration install` para el kind agy (ver `herdr integration
 # status`). Vacío = se usa el nombre del kind tal cual.
 TRIO_HERDR_INTEGRATION_AGY="antigravity-cli"
+
+# Minutos sin heartbeat ni commits nuevos antes de considerar un agente vivo como colgado.
+TRIO_STALE_MINUTES="15"
+
+# Patrones ERE (case-insensitive) en la salida del panel para detectar sin-cuota.
+TRIO_QUOTA_PATTERNS="rate limit|rate_limit|quota exceeded|resource exhausted|resource_exhausted|too many requests|429|usage limit|insufficient_quota|out of quota|sin cuota"
