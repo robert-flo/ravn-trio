@@ -6,6 +6,7 @@ aqui="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 fallo() { echo "FALLO: $*" >&2; exit 1; }
+now_iso="$(date --iso-8601=seconds)"
 
 pj="$tmp/HR-DEMO"
 git init -q "$pj"
@@ -179,12 +180,12 @@ jq -e '.["ravn-trio-21"].estado == "hecho" and .["ravn-trio-21"].paso == "merge"
 
 # 3b. Modo por defecto: ticket nuevo en en-curso no despierta; ticket nuevo en hecho sí despierta
 mkdir -p "$pj/.trio/ravn-trio-22"
-cat > "$pj/.trio/ravn-trio-22/status.json" <<'EOF'
+cat > "$pj/.trio/ravn-trio-22/status.json" <<EOF
 {
   "ticket": "ravn-trio-22",
   "estado": "en-curso",
   "paso": "plan",
-  "timestamp": "2026-11-17T09:09:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
 echo "change_needs_roberto" > "$inotify_mode"
@@ -212,12 +213,12 @@ jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == 
 rm -rf "$pj/.trio/ravn-trio-22" "$pj/.trio/ravn-trio-23"
 
 # 4. Detección de blocked en herdr agent get dentro del loop sin cambios en status.json
-cat > "$pj/.trio/ravn-trio-21/status.json" <<'EOF'
+cat > "$pj/.trio/ravn-trio-21/status.json" <<EOF
 {
   "ticket": "ravn-trio-21",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:15:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
 echo "noop" > "$inotify_mode"
@@ -313,20 +314,20 @@ check_bad_ticket --ticket --json
 
 # 7. --ticket: ignora cambios en otros tickets (124), no llama herdr agent get en ajenos, y despierta con el filtrado (JSON y texto)
 mkdir -p "$pj/.trio/rf-dotfiles-55"
-cat > "$pj/.trio/ravn-trio-21/status.json" <<'EOF'
+cat > "$pj/.trio/ravn-trio-21/status.json" <<EOF
 {
   "ticket": "ravn-trio-21",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:20:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
-cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<EOF
 {
   "ticket": "rf-dotfiles-55",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:20:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
 
@@ -401,12 +402,12 @@ jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == 
   || fallo "esperaba evento de rf-dotfiles-55 en --json: $out_f55"
 
 # Mismo caso en salida de texto legible
-cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<EOF
 {
   "ticket": "rf-dotfiles-55",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:20:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
 out_f55_txt="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket rf-dotfiles-55 --timeout 5)"
@@ -418,20 +419,20 @@ fi
 
 # 8. --ticket: repetido, separado por comas, sufijo numérico y campo .ticket del JSON
 mkdir -p "$pj/.trio/custom-dir"
-cat > "$pj/.trio/custom-dir/status.json" <<'EOF'
+cat > "$pj/.trio/custom-dir/status.json" <<EOF
 {
   "ticket": "alias-99",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:20:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
-cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<EOF
 {
   "ticket": "rf-dotfiles-55",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:20:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
 echo "change_filtered_55" > "$inotify_mode"
@@ -443,20 +444,20 @@ jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == 
 # Repetido: --ticket ravn-trio-21 --ticket 55
 # ravn-trio-21 quedó en hecho en el caso 7; si no se reinicia, el arranque
 # con --ticket lo toma como evento y no llega a ver el cambio de 55.
-cat > "$pj/.trio/ravn-trio-21/status.json" <<'EOF'
+cat > "$pj/.trio/ravn-trio-21/status.json" <<EOF
 {
   "ticket": "ravn-trio-21",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:20:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
-cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<EOF
 {
   "ticket": "rf-dotfiles-55",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:20:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
 out_rep="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket ravn-trio-21 --ticket 55 --timeout 5 --json)"
@@ -464,12 +465,12 @@ jq -e '.status == "changed" and (.events | length == 1) and .events[0].clave == 
   || fallo "--ticket repetido falló: $out_rep"
 
 # Separado por comas: --ticket alias-99,rf-dotfiles-55
-cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<EOF
 {
   "ticket": "rf-dotfiles-55",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:20:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
 out_csv="$(PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch "$pj" --ticket alias-99,rf-dotfiles-55 --timeout 5 --json)"
@@ -507,12 +508,12 @@ jq -r '.events[0].tail' <<<"$out_race_nr" | grep -q 'linea-tail de' \
   || fallo "race condition needs-roberto debía incluir tail: $out_race_nr"
 
 # 9c. Con --ticket y ya en en-curso con pm_herdr_status blocked -> despierta inmediato (exit 0)
-cat > "$pj/.trio/rf-dotfiles-55/status.json" <<'EOF'
+cat > "$pj/.trio/rf-dotfiles-55/status.json" <<EOF
 {
   "ticket": "rf-dotfiles-55",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:27:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
 cat > "$tmp/bin_stubs/herdr" <<'EOF'
@@ -580,5 +581,255 @@ err="$(cd "$tmp" && PATH="$tmp/bin_stubs:$PATH" "$aqui/pj-trio" watch --timeout 
 grep -q '<proyecto>' <<<"$err" || fallo "watch fuera de un Home Repo debía pedir <proyecto>: $err"
 "$aqui/pj-trio" watch --help | grep -q 'Si se omite' \
   || fallo "pj-trio watch --help debe decir que <proyecto> se puede omitir"
+
+# 12. estado_real (sin-cuota, colgado, muerto, terminado), .session en herdr y gh selectivo.
+pj_sess="$tmp/HR-SESS"
+git init -q "$pj_sess"
+git -C "$pj_sess" remote add origin "https://github.com/o/HR-SESS.git"
+cat > "$pj_sess/proyecto.yml" <<'EOF'
+proyecto: HR-SESS
+EOF
+mkdir -p "$pj_sess/.trio/ravn-trio-31" "$pj_sess/.trio/ravn-trio-32"
+
+cat > "$pj_sess/.trio/ravn-trio-31/status.json" <<EOF
+{
+  "ticket": "ravn-trio-31",
+  "estado": "en-curso",
+  "paso": "wk",
+  "owner": "wk-ravn-trio-31",
+  "session": "spec-231",
+  "heartbeat_at": "$now_iso",
+  "timestamp": "$now_iso"
+}
+EOF
+cat > "$pj_sess/.trio/ravn-trio-32/status.json" <<EOF
+{
+  "ticket": "ravn-trio-32",
+  "estado": "en-curso",
+  "paso": "wk",
+  "owner": "wk-ravn-trio-32",
+  "session": "spec-231",
+  "pr": "https://github.com/o/ravn-trio/pull/32",
+  "heartbeat_at": "$now_iso",
+  "timestamp": "$now_iso"
+}
+EOF
+
+sess_herdr_mode="$tmp/sess_herdr_mode"
+echo "quota" > "$sess_herdr_mode"
+mkdir -p "$tmp/bin_sess"
+cat > "$tmp/bin_sess/herdr" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" != "--session" || "\${2:-}" != "spec-231" ]]; then
+  exit 1
+fi
+shift 2
+mode="\$(cat "$sess_herdr_mode" 2>/dev/null || echo quota)"
+case "\${1:-} \${2:-}" in
+  "workspace list")
+    echo '{"result":{"workspaces":[{"workspace_id":"ws31","label":"trio HR-SESS/ravn-trio#31"},{"workspace_id":"ws32","label":"trio HR-SESS/ravn-trio#32"}]}}'
+    ;;
+  "agent list")
+    echo '{"result":{"agents":[{"name":"pm-ravn-trio-31","agent_status":"idle","workspace_id":"ws31"},{"name":"wk-ravn-trio-31","agent_status":"running","workspace_id":"ws31"},{"name":"pm-ravn-trio-32","agent_status":"idle","workspace_id":"ws32"},{"name":"wk-ravn-trio-32","agent_status":"running","workspace_id":"ws32"}]}}'
+    ;;
+  "agent get")
+    case "\${3:-}" in
+      wk-ravn-trio-31)
+        if [[ "\$mode" == "dead" ]]; then
+          echo '{"result":{"agent":{"name":"wk-ravn-trio-31","agent_status":"exited","workspace_id":"ws31"}}}'
+        else
+          echo '{"result":{"agent":{"name":"wk-ravn-trio-31","agent_status":"running","workspace_id":"ws31"}}}'
+        fi
+        ;;
+      wk-ravn-trio-32)
+        if [[ "\$mode" == "dead32" ]]; then
+          echo '{"result":{"agent":{"name":"wk-ravn-trio-32","agent_status":"exited","workspace_id":"ws32"}}}'
+        else
+          echo '{"result":{"agent":{"name":"wk-ravn-trio-32","agent_status":"running","workspace_id":"ws32"}}}'
+        fi
+        ;;
+      pm-ravn-trio-*)
+        echo '{"result":{"agent":{"name":"'"\${3:-}"'","agent_status":"idle","workspace_id":"ws31"}}}'
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "agent read")
+    if [[ "\$mode" == "quota" && "\${3:-}" == "wk-ravn-trio-31" ]]; then
+      echo "Error 429: rate limit exceeded"
+    else
+      echo "working normally"
+    fi
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+cp "$tmp/bin_stubs/inotifywait" "$tmp/bin_sess/inotifywait"
+chmod +x "$tmp/bin_sess/herdr" "$tmp/bin_sess/inotifywait"
+
+gh_watch_log="$tmp/gh_watch.log"
+: > "$gh_watch_log"
+cat > "$tmp/bin_sess/gh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$gh_watch_log"
+case "\${1:-} \${2:-}" in
+  "pr view") echo '{"state":"MERGED","reviewDecision":"APPROVED","statusCheckRollup":[]}' ;;
+  "issue view") echo '{"state":"CLOSED"}' ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$tmp/bin_sess/gh"
+
+# 12a. Respeta .session y detecta vivo -> sin-cuota en --json y legible
+snap_sess="$tmp/snap_sess.json"
+cat > "$snap_sess" <<EOF
+{
+  "ravn-trio-31": {
+    "clave": "ravn-trio-31",
+    "ticket": "ravn-trio-31",
+    "estado": "en-curso",
+    "estado_real": "vivo",
+    "paso": "wk",
+    "pm_agent": "pm-ravn-trio-31",
+    "pm_herdr_status": "idle",
+    "session": "spec-231",
+    "pr": "",
+    "head": "",
+    "merge_danger": "",
+    "timestamp": "$now_iso"
+  }
+}
+EOF
+out_quota="$(PATH="$tmp/bin_sess:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-31 --snapshot "$snap_sess" --json)"
+jq -e '.status == "changed" and .events[0].tipo == "estado_real" and .events[0].estado_real == "sin-cuota" and .events[0].prev_estado_real == "vivo"' <<<"$out_quota" >/dev/null \
+  || fallo "transición vivo -> sin-cuota con .session falló: $out_quota"
+
+# Salida legible de estado_real
+cat > "$snap_sess" <<EOF
+{
+  "ravn-trio-31": {
+    "clave": "ravn-trio-31",
+    "ticket": "ravn-trio-31",
+    "estado": "en-curso",
+    "estado_real": "vivo",
+    "paso": "wk",
+    "pm_agent": "pm-ravn-trio-31",
+    "pm_herdr_status": "idle",
+    "session": "spec-231",
+    "pr": "",
+    "head": "",
+    "merge_danger": "",
+    "timestamp": "$now_iso"
+  }
+}
+EOF
+out_quota_txt="$(PATH="$tmp/bin_sess:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-31 --snapshot "$snap_sess")"
+grep -q 'real=sin-cuota' <<<"$out_quota_txt" || fallo "falta real=sin-cuota en salida legible: $out_quota_txt"
+grep -q 'estado_real: vivo -> sin-cuota' <<<"$out_quota_txt" || fallo "falta transición estado_real en salida legible: $out_quota_txt"
+
+# 12b. Transición vivo -> colgado
+echo "ok" > "$sess_herdr_mode"
+cat > "$snap_sess" <<EOF
+{
+  "ravn-trio-31": {
+    "clave": "ravn-trio-31",
+    "ticket": "ravn-trio-31",
+    "estado": "en-curso",
+    "estado_real": "vivo",
+    "paso": "wk",
+    "pm_agent": "pm-ravn-trio-31",
+    "pm_herdr_status": "idle",
+    "session": "spec-231",
+    "pr": "",
+    "head": "",
+    "merge_danger": "",
+    "timestamp": "$now_iso"
+  }
+}
+EOF
+cat > "$pj_sess/.trio/ravn-trio-31/status.json" <<'EOF'
+{
+  "ticket": "ravn-trio-31",
+  "estado": "en-curso",
+  "paso": "wk",
+  "owner": "wk-ravn-trio-31",
+  "session": "spec-231",
+  "heartbeat_at": "2020-01-01T00:00:00-06:00",
+  "timestamp": "2020-01-01T00:00:00-06:00"
+}
+EOF
+out_colgado="$(PATH="$tmp/bin_sess:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-31 --snapshot "$snap_sess" --json)"
+jq -e '.status == "changed" and .events[0].tipo == "estado_real" and .events[0].estado_real == "colgado" and .events[0].prev_estado_real == "vivo"' <<<"$out_colgado" >/dev/null \
+  || fallo "transición vivo -> colgado falló: $out_colgado"
+
+# 12c. Transición vivo -> muerto (sin gh)
+echo "dead" > "$sess_herdr_mode"
+cat > "$pj_sess/.trio/ravn-trio-31/status.json" <<EOF
+{
+  "ticket": "ravn-trio-31",
+  "estado": "en-curso",
+  "paso": "wk",
+  "owner": "wk-ravn-trio-31",
+  "session": "spec-231",
+  "heartbeat_at": "$now_iso",
+  "timestamp": "$now_iso"
+}
+EOF
+cat > "$snap_sess" <<EOF
+{
+  "ravn-trio-31": {
+    "clave": "ravn-trio-31",
+    "ticket": "ravn-trio-31",
+    "estado": "en-curso",
+    "estado_real": "vivo",
+    "paso": "wk",
+    "pm_agent": "pm-ravn-trio-31",
+    "pm_herdr_status": "idle",
+    "session": "spec-231",
+    "pr": "",
+    "head": "",
+    "merge_danger": "",
+    "timestamp": "$now_iso"
+  }
+}
+EOF
+out_muerto="$(PATH="$tmp/bin_sess:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-31 --snapshot "$snap_sess" --json)"
+jq -e '.status == "changed" and .events[0].tipo == "estado_real" and .events[0].estado_real == "muerto" and .events[0].prev_estado_real == "vivo"' <<<"$out_muerto" >/dev/null \
+  || fallo "transición vivo -> muerto falló: $out_muerto"
+
+# 12d. Tick normal no llama gh; muerto con PR MERGED + issue CLOSED confirma terminado vía gh
+: > "$gh_watch_log"
+echo "ok" > "$sess_herdr_mode"
+echo "sleep_timeout" > "$inotify_mode"
+rc=0
+PATH="$tmp/bin_sess:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-32 --timeout 1 --json >/dev/null || rc=$?
+[[ "$rc" -eq 124 ]] || fallo "esperaba timeout 124 en tick normal vivo, obtuve $rc"
+if [[ -s "$gh_watch_log" ]]; then
+  fallo "tick rápido sin transición no debía consultar gh: $(cat "$gh_watch_log")"
+fi
+
+echo "dead32" > "$sess_herdr_mode"
+cat > "$snap_sess" <<EOF
+{
+  "ravn-trio-32": {
+    "clave": "ravn-trio-32",
+    "ticket": "ravn-trio-32",
+    "estado": "en-curso",
+    "estado_real": "vivo",
+    "paso": "wk",
+    "pm_agent": "pm-ravn-trio-32",
+    "pm_herdr_status": "idle",
+    "session": "spec-231",
+    "pr": "https://github.com/o/ravn-trio/pull/32",
+    "head": "",
+    "merge_danger": "",
+    "timestamp": "$now_iso"
+  }
+}
+EOF
+out_term="$(PATH="$tmp/bin_sess:$PATH" "$aqui/pj-trio" watch "$pj_sess" --ticket ravn-trio-32 --snapshot "$snap_sess" --json)"
+jq -e '.status == "changed" and .events[0].tipo == "estado_real" and .events[0].estado_real == "terminado" and .events[0].prev_estado_real == "vivo"' <<<"$out_term" >/dev/null \
+  || fallo "confirmación de terminado vía gh falló: $out_term"
+[[ -s "$gh_watch_log" ]] || fallo "se esperaba consulta selectiva a gh para confirmar terminado"
 
 echo "OK watch"

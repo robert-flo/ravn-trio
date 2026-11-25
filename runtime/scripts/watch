@@ -116,123 +116,39 @@ ticket=""
 export PJ_TRIO_NO_CLONE="${PJ_TRIO_NO_CLONE:-1}"
 trio_resolver_proyecto
 
-matches_clave() {
-  local clave="$1" f
-  for f in "${ticket_filters[@]}"; do
-    if [[ "$clave" == "$f" ]]; then
-      return 0
-    fi
-    if [[ "$f" =~ ^[0-9]+$ && "$clave" == *-"$f" ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-matches_ticket_val() {
-  local tval="$1" f
-  for f in "${ticket_filters[@]}"; do
-    if [[ "$tval" == "$f" ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-status_file_mentions_filter() {
-  local file="$1" f
-  for f in "${ticket_filters[@]}"; do
-    if grep -Fq -- "$f" "$file" 2>/dev/null; then
-      return 0
-    fi
-  done
-  return 1
-}
-
 collect_snapshot() {
-  local -a status_files=()
-  local status_file clave raw_status estado paso pr head_sha merge_danger ts ticket_val
-  local repo_name pm_agent pm_herdr_status agent_json
-  local snapshot="{}" item
-
-  shopt -s nullglob
-  status_files=("$project_dir/.trio"/*/status.json)
-  shopt -u nullglob
-
-  for status_file in "${status_files[@]}"; do
-    clave="$(basename "$(dirname "$status_file")")"
-    raw_status=""
-    ticket_val=""
-    if (( ${#ticket_filters[@]} > 0 )) && ! matches_clave "$clave"; then
-      status_file_mentions_filter "$status_file" || continue
-      raw_status="$(jq -e '.' "$status_file" 2>/dev/null || true)"
-      [[ -n "$raw_status" ]] || continue
-      ticket_val="$(jq -r --arg c "$clave" '.ticket // $c' <<<"$raw_status")"
-      matches_ticket_val "$ticket_val" || continue
-    fi
-
-    if [[ -z "$raw_status" ]]; then
-      if ! raw_status="$(jq -e '.' "$status_file" 2>/dev/null)"; then
-        print_warn "status.json inválido en ${clave}; se omite." >&2
-        continue
-      fi
-      ticket_val="$(jq -r --arg c "$clave" '.ticket // $c' <<<"$raw_status")"
-    fi
-
-    estado="$(jq -r '.estado // ""' <<<"$raw_status")"
-    paso="$(jq -r '.paso // ""' <<<"$raw_status")"
-    pr="$(jq -r '.pr // ""' <<<"$raw_status")"
-    head_sha="$(jq -r '.head // ""' <<<"$raw_status")"
-    merge_danger="$(jq -r '.merge_danger // ""' <<<"$raw_status")"
-    ts="$(jq -r '.timestamp // ""' <<<"$raw_status")"
-
-    if [[ "$clave" =~ ^(.+)-([0-9]+)$ ]]; then
-      repo_name="${BASH_REMATCH[1]}"
-      ticket="${BASH_REMATCH[2]}"
-      ws_label_lookup="trio ${project_name}/${repo_name}#${ticket}"
-    else
-      repo_name=""
-      ticket="$clave"
-      ws_label_lookup="trio ${project_name}#${ticket}"
-    fi
-    pm_agent="$(nombre_agente pm)"
-
-    pm_herdr_status=""
-    if [[ "$estado" == "en-curso" ]] && command -v herdr >/dev/null 2>&1; then
-      os_agent="$(nombre_agente os)"
-      trio_resolver_agente_herdr "$pm_agent" "$os_agent" "$ws_label_lookup" "$ticket" "unknown"
-      pm_agent="$trio_herdr_target"
-      pm_herdr_status="$trio_herdr_status"
-    fi
-
-    item="$(jq -n \
-      --arg clave "$clave" \
-      --arg ticket "$ticket_val" \
-      --arg estado "$estado" \
-      --arg paso "$paso" \
-      --arg pm_agent "$pm_agent" \
-      --arg pm_herdr_status "$pm_herdr_status" \
-      --arg pr "$pr" \
-      --arg head "$head_sha" \
-      --arg merge_danger "$merge_danger" \
-      --arg timestamp "$ts" \
-      '{
-        clave: $clave,
-        ticket: $ticket,
-        estado: $estado,
-        paso: $paso,
-        pm_agent: $pm_agent,
-        pm_herdr_status: $pm_herdr_status,
-        pr: $pr,
-        head: $head,
-        merge_danger: $merge_danger,
-        timestamp: $timestamp
-      }')"
-
-    snapshot="$(jq -n --argjson s "$snapshot" --arg k "$clave" --argjson v "$item" '$s + {($k): $v}')"
+  local -a fleet_args=("$project_dir" --json --no-gh)
+  local f fleet_json
+  for f in "${ticket_filters[@]}"; do
+    fleet_args+=(--ticket "$f")
   done
 
-  jq -S '.' <<<"$snapshot"
+  fleet_json="$("$module_dir/fleet" "${fleet_args[@]}" 2>/dev/null || echo "[]")"
+  if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$fleet_json"; then
+    fleet_json="[]"
+  fi
+
+  jq -S '
+    reduce .[] as $it ({}; . + {
+      ($it.clave): {
+        clave: $it.clave,
+        ticket: ($it.ticket // $it.clave),
+        estado: ($it.estado // ""),
+        estado_real: ($it.estado_real // ""),
+        paso: ($it.paso // ""),
+        step: ($it.step // ""),
+        owner: ($it.owner // ""),
+        pm_agent: ($it.pm_agent // ""),
+        pm_herdr_status: ($it.pm_herdr_status // ""),
+        workspace_id: ($it.workspace_id // ""),
+        session: ($it.session // ""),
+        pr: ($it.pr // ""),
+        head: ($it.head // ""),
+        merge_danger: ($it.merge_danger // ""),
+        timestamp: ($it.timestamp // "")
+      }
+    })
+  ' <<<"$fleet_json"
 }
 
 diff_snapshots() {
@@ -240,22 +156,30 @@ diff_snapshots() {
   local curr_json="$2"
   local mode_verbose="${3:-$verbose}"
   jq -n --argjson prev "$prev_json" --argjson curr "$curr_json" --argjson verbose "$mode_verbose" '
+    def is_actionable_real($r):
+      ($r == "sin-cuota" or $r == "colgado" or $r == "muerto" or $r == "terminado" or $r == "trabado");
+
     [
       ($curr | keys_unsorted[]) as $k
       | ($prev[$k] // null) as $p
       | $curr[$k] as $c
+      | ($c.estado_real // "") as $cr
+      | ($p.estado_real // "") as $pr
       | select(
           if $verbose == 1 then
             ($p == null)
             or ($c.estado != $p.estado)
             or ($c.paso != $p.paso)
+            or (($pr != "") and ($cr != $pr) and is_actionable_real($cr))
             or (($c.pm_herdr_status != $p.pm_herdr_status) and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
           else
             if $p == null then
               ($c.estado == "hecho" or $c.estado == "needs-roberto" or $c.estado == "blocked")
+              or is_actionable_real($cr)
               or ($c.estado == "en-curso" and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
             else
               (($c.estado != $p.estado) and ($c.estado == "hecho" or $c.estado == "needs-roberto" or $c.estado == "blocked"))
+              or (($pr != "") and ($cr != $pr) and is_actionable_real($cr))
               or ($c.estado == "en-curso" and ($c.pm_herdr_status != $p.pm_herdr_status) and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
             end
           end
@@ -266,15 +190,19 @@ diff_snapshots() {
           tipo: (
             if $p == null then "nuevo"
             elif $c.estado != $p.estado then "estado"
+            elif ($pr != "") and ($cr != $pr) and is_actionable_real($cr) then "estado_real"
             elif $c.paso != $p.paso then "paso"
             else "pm_herdr_status"
             end
           ),
           estado: $c.estado,
+          estado_real: $cr,
           paso: $c.paso,
           pm_agent: $c.pm_agent,
           pm_herdr_status: $c.pm_herdr_status,
+          session: ($c.session // ""),
           prev_estado: ($p.estado // ""),
+          prev_estado_real: $pr,
           prev_paso: ($p.paso // ""),
           prev_pm_herdr_status: ($p.pm_herdr_status // ""),
           pr: $c.pr,
@@ -283,6 +211,47 @@ diff_snapshots() {
         }
     ]
   '
+}
+
+confirm_events_with_gh() {
+  local prev_json="$1"
+  local curr_json="$2"
+  local events_json="$3"
+  local mode_verbose="${4:-$verbose}"
+  command -v gh >/dev/null 2>&1 || { confirmed_snapshot="$curr_json"; confirmed_events="$events_json"; return 0; }
+
+  local updated_snap="$curr_json"
+  local any_updated=0
+  local count i ev clave estado estado_real fresh_json fresh_item
+  count="$(jq 'length' <<<"$events_json")"
+  for (( i = 0; i < count; i++ )); do
+    ev="$(jq -c ".[$i]" <<<"$events_json")"
+    clave="$(jq -r '.clave // ""' <<<"$ev")"
+    estado="$(jq -r '.estado // ""' <<<"$ev")"
+    estado_real="$(jq -r '.estado_real // ""' <<<"$ev")"
+
+    if [[ "$estado" != "hecho" && ( "$estado_real" == "muerto" || "$estado_real" == "colgado" ) ]]; then
+      fresh_json="$("$module_dir/fleet" "$project_dir" --json --ticket "$clave" 2>/dev/null || echo "[]")"
+      fresh_item="$(jq -c '.[0] // empty' <<<"$fresh_json" 2>/dev/null || true)"
+      if [[ -n "$fresh_item" ]] && [[ "$(jq -r '.estado_real // ""' <<<"$fresh_item")" == "terminado" ]]; then
+        updated_snap="$(jq -S --arg k "$clave" --argjson it "$fresh_item" '
+          .[$k] = (.[$k] + {
+            estado_real: ($it.estado_real // ""),
+            step: ($it.step // ""),
+            pr: ($it.pr // .[$k].pr)
+          })
+        ' <<<"$updated_snap")"
+        any_updated=1
+      fi
+    fi
+  done
+
+  confirmed_snapshot="$updated_snap"
+  if [[ "$any_updated" -eq 1 ]]; then
+    confirmed_events="$(diff_snapshots "$prev_json" "$updated_snap" "$mode_verbose")"
+  else
+    confirmed_events="$events_json"
+  fi
 }
 
 write_snapshot() {
@@ -295,19 +264,21 @@ write_snapshot() {
 enrich_and_emit() {
   local events_json="$1"
   local enriched="[]"
-  local count i ev estado pm_status pm_agent tail_out
+  local count i ev estado estado_real pm_status pm_agent ev_session tail_out
 
   count="$(jq 'length' <<<"$events_json")"
   for (( i = 0; i < count; i++ )); do
     ev="$(jq -c ".[$i]" <<<"$events_json")"
     estado="$(jq -r '.estado // ""' <<<"$ev")"
+    estado_real="$(jq -r '.estado_real // ""' <<<"$ev")"
     pm_status="$(jq -r '.pm_herdr_status // ""' <<<"$ev")"
     pm_agent="$(jq -r '.pm_agent // ""' <<<"$ev")"
+    ev_session="$(jq -r '.session // ""' <<<"$ev")"
     tail_out=""
 
-    if [[ "$estado" == "needs-roberto" || "$estado" == "blocked" || "$pm_status" == "blocked" || "$pm_status" == "unknown" ]]; then
+    if [[ "$estado" == "needs-roberto" || "$estado" == "blocked" || "$pm_status" == "blocked" || "$pm_status" == "unknown" || "$estado_real" == "sin-cuota" || "$estado_real" == "colgado" || "$estado_real" == "muerto" || "$estado_real" == "trabado" ]]; then
       if [[ -n "$pm_agent" ]] && command -v herdr >/dev/null 2>&1; then
-        tail_out="$(herdr agent read "$pm_agent" 2>/dev/null | tail -n 25 || true)"
+        tail_out="$(trio_herdr_cmd "$ev_session" agent read "$pm_agent" 2>/dev/null | tail -n 25 || true)"
       fi
     fi
 
@@ -323,22 +294,26 @@ enrich_and_emit() {
   print_section "Watch — ${project_name}"
   for (( i = 0; i < count; i++ )); do
     ev="$(jq -c ".[$i]" <<<"$enriched")"
-    local clave tipo paso prev_estado prev_paso prev_pm
+    local clave tipo paso prev_estado prev_estado_real prev_paso prev_pm
     clave="$(jq -r '.clave' <<<"$ev")"
     tipo="$(jq -r '.tipo' <<<"$ev")"
     estado="$(jq -r '.estado' <<<"$ev")"
+    estado_real="$(jq -r '.estado_real // ""' <<<"$ev")"
     paso="$(jq -r '.paso' <<<"$ev")"
     pm_status="$(jq -r '.pm_herdr_status' <<<"$ev")"
     pm_agent="$(jq -r '.pm_agent' <<<"$ev")"
     prev_estado="$(jq -r '.prev_estado' <<<"$ev")"
+    prev_estado_real="$(jq -r '.prev_estado_real // ""' <<<"$ev")"
     prev_paso="$(jq -r '.prev_paso' <<<"$ev")"
     prev_pm="$(jq -r '.prev_pm_herdr_status' <<<"$ev")"
     tail_out="$(jq -r '.tail' <<<"$ev")"
 
-    printf '  %s [%s]: estado=%s paso=%s pm=%s\n' \
-      "$clave" "$tipo" "${estado:--}" "${paso:--}" "${pm_status:--}"
+    printf '  %s [%s]: estado=%s real=%s paso=%s pm=%s\n' \
+      "$clave" "$tipo" "${estado:--}" "${estado_real:--}" "${paso:--}" "${pm_status:--}"
     if [[ "$tipo" == "estado" ]]; then
       printf '    estado: %s -> %s\n' "${prev_estado:--}" "${estado:--}"
+    elif [[ "$tipo" == "estado_real" ]]; then
+      printf '    estado_real: %s -> %s\n' "${prev_estado_real:--}" "${estado_real:--}"
     elif [[ "$tipo" == "paso" ]]; then
       printf '    paso: %s -> %s\n' "${prev_paso:--}" "${paso:--}"
     elif [[ "$tipo" == "pm_herdr_status" ]]; then
@@ -359,6 +334,9 @@ if [[ -n "$snapshot_file" && -f "$snapshot_file" ]]; then
   if prev_snapshot="$(jq -e '.' "$snapshot_file" 2>/dev/null)"; then
     events="$(diff_snapshots "$prev_snapshot" "$curr_snapshot")"
     if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
+      confirm_events_with_gh "$prev_snapshot" "$curr_snapshot" "$events"
+      curr_snapshot="$confirmed_snapshot"
+      events="$confirmed_events"
       write_snapshot "$curr_snapshot"
       enrich_and_emit "$events"
       exit 0
@@ -369,6 +347,9 @@ if [[ -n "$snapshot_file" && -f "$snapshot_file" ]]; then
 elif [[ -z "$snapshot_file" && ${#ticket_filters[@]} -gt 0 ]]; then
   events="$(diff_snapshots "{}" "$curr_snapshot" 0)"
   if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
+    confirm_events_with_gh "{}" "$curr_snapshot" "$events" 0
+    curr_snapshot="$confirmed_snapshot"
+    events="$confirmed_events"
     enrich_and_emit "$events"
     exit 0
   fi
@@ -406,6 +387,9 @@ while true; do
   curr_snapshot="$(collect_snapshot)"
   events="$(diff_snapshots "$baseline" "$curr_snapshot")"
   if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
+    confirm_events_with_gh "$baseline" "$curr_snapshot" "$events"
+    curr_snapshot="$confirmed_snapshot"
+    events="$confirmed_events"
     write_snapshot "$curr_snapshot"
     enrich_and_emit "$events"
     exit 0
