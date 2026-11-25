@@ -10,6 +10,8 @@ trio_cargar_config() {
     OS_KIND=""
     TRIO_GIT_NAME=""
     TRIO_GIT_EMAIL=""
+    TRIO_STALE_MINUTES=""
+    TRIO_QUOTA_PATTERNS=""
 
     # Capas (la última gana): defaults del sistema → override en /zt → repo.
     # PJ_TRIO_CONFIG, si está, reemplaza todas las capas. Nada en $HOME.
@@ -37,6 +39,8 @@ trio_cargar_config() {
         fi
     done
     [[ -n "$OS_KIND" ]] || OS_KIND="${PM_KIND:-agy}"
+    [[ -n "${TRIO_STALE_MINUTES:-}" ]] || TRIO_STALE_MINUTES="15"
+    [[ -n "${TRIO_QUOTA_PATTERNS:-}" ]] || TRIO_QUOTA_PATTERNS="rate limit|rate_limit|quota exceeded|resource exhausted|resource_exhausted|too many requests|429|usage limit|insufficient_quota|out of quota|sin cuota"
     config_file=""
     if ((${#trio_config_capas[@]})); then
         config_file="${trio_config_capas[*]}"
