@@ -15,12 +15,12 @@ proyecto: HR-DEMO
 EOF
 
 mkdir -p "$pj/.trio/ravn-trio-21"
-cat > "$pj/.trio/ravn-trio-21/status.json" <<'EOF'
+cat > "$pj/.trio/ravn-trio-21/status.json" <<EOF
 {
   "ticket": "ravn-trio-21",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:00:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
 
@@ -61,33 +61,33 @@ case "\$mode" in
     step=\$(( step + 1 ))
     echo "\$step" > "$inotify_step"
     if [[ "\$step" -eq 1 ]]; then
-      cat > "$pj/.trio/ravn-trio-21/status.json" <<'JSON'
+      cat > "$pj/.trio/ravn-trio-21/status.json" <<JSON
 {
   "ticket": "ravn-trio-21",
   "estado": "en-curso",
   "paso": "rv",
-  "timestamp": "2026-11-17T09:05:00-06:00"
+  "timestamp": "$now_iso"
 }
 JSON
       exit 0
     fi
-    cat > "$pj/.trio/ravn-trio-21/status.json" <<'JSON'
+    cat > "$pj/.trio/ravn-trio-21/status.json" <<JSON
 {
   "ticket": "ravn-trio-21",
   "estado": "hecho",
   "paso": "merge",
-  "timestamp": "2026-11-17T09:08:00-06:00"
+  "timestamp": "$now_iso"
 }
 JSON
     exit 0
     ;;
   change_paso)
-    cat > "$pj/.trio/ravn-trio-21/status.json" <<'JSON'
+    cat > "$pj/.trio/ravn-trio-21/status.json" <<JSON
 {
   "ticket": "ravn-trio-21",
   "estado": "en-curso",
   "paso": "rv",
-  "timestamp": "2026-11-17T09:05:00-06:00"
+  "timestamp": "$now_iso"
 }
 JSON
     exit 0
@@ -116,19 +116,20 @@ chmod +x "$tmp/bin_stubs/inotifywait"
 
 # 1. Modo --verbose: diff inmediato contra --snapshot por cambio de paso
 snap="$tmp/snap.json"
-cat > "$snap" <<'EOF'
+cat > "$snap" <<EOF
 {
   "ravn-trio-21": {
     "clave": "ravn-trio-21",
     "ticket": "ravn-trio-21",
     "estado": "en-curso",
+    "estado_real": "vivo",
     "paso": "plan",
     "pm_agent": "pm-ravn-trio-21",
     "pm_herdr_status": "running",
     "pr": "",
     "head": "",
     "merge_danger": "",
-    "timestamp": "2026-11-17T08:55:00-06:00"
+    "timestamp": "$now_iso"
   }
 }
 EOF
@@ -146,27 +147,28 @@ jq -e '.status == "changed" and .events[0].tipo == "paso" and .events[0].prev_pa
   || fallo "detección de cambio de paso con --verbose falló: $out_paso"
 
 # 3. Modo por defecto: absorbe plan -> wk -> rv (actualizando snapshot) y despierta en hecho
-cat > "$pj/.trio/ravn-trio-21/status.json" <<'EOF'
+cat > "$pj/.trio/ravn-trio-21/status.json" <<EOF
 {
   "ticket": "ravn-trio-21",
   "estado": "en-curso",
   "paso": "wk",
-  "timestamp": "2026-11-17T09:00:00-06:00"
+  "timestamp": "$now_iso"
 }
 EOF
-cat > "$snap" <<'EOF'
+cat > "$snap" <<EOF
 {
   "ravn-trio-21": {
     "clave": "ravn-trio-21",
     "ticket": "ravn-trio-21",
     "estado": "en-curso",
+    "estado_real": "vivo",
     "paso": "plan",
     "pm_agent": "pm-ravn-trio-21",
     "pm_herdr_status": "running",
     "pr": "",
     "head": "",
     "merge_danger": "",
-    "timestamp": "2026-11-17T08:55:00-06:00"
+    "timestamp": "$now_iso"
   }
 }
 EOF
@@ -257,19 +259,20 @@ jq -r '.events[0].tail' <<<"$out_blk" | grep -q 'linea-30 de pm-ravn-trio-21' \
   || fallo "blocked debía capturar últimas 25 líneas de herdr agent read"
 
 # 4b. Salida legible (sin --json) muestra resumen y últimas líneas
-cat > "$snap" <<'EOF'
+cat > "$snap" <<EOF
 {
   "ravn-trio-21": {
     "clave": "ravn-trio-21",
     "ticket": "ravn-trio-21",
     "estado": "en-curso",
+    "estado_real": "vivo",
     "paso": "wk",
     "pm_agent": "pm-ravn-trio-21",
     "pm_herdr_status": "running",
     "pr": "",
     "head": "",
     "merge_danger": "",
-    "timestamp": "2026-11-17T09:15:00-06:00"
+    "timestamp": "$now_iso"
   }
 }
 EOF

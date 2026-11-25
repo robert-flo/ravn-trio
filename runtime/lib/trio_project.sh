@@ -452,6 +452,28 @@ trio_herdr_cmd() {
     fi
 }
 
+trio_parse_ticket_arg() {
+    local arg="${1:-}"
+    if [[ -z "$arg" || "$arg" == -* ]]; then
+        print_error "--ticket requiere una clave o lista separada por comas." >&2
+        return 1
+    fi
+    if [[ "$arg" == ,* || "$arg" == *, || "$arg" == *,,* ]]; then
+        print_error "--ticket contiene un elemento vacío en '$arg'." >&2
+        return 1
+    fi
+    local -a parts=()
+    local p
+    IFS=',' read -r -a parts <<<"$arg"
+    for p in "${parts[@]}"; do
+        if [[ -z "$p" ]]; then
+            print_error "--ticket contiene un elemento vacío en '$arg'." >&2
+            return 1
+        fi
+        ticket_filters+=("$p")
+    done
+}
+
 trio_ticket_matches_clave() {
     local clave="$1"
     shift

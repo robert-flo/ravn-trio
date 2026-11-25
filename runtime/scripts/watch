@@ -45,22 +45,11 @@ positional=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ticket)
-      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+      if [[ $# -lt 2 ]]; then
         print_error "--ticket requiere una clave o lista separada por comas." >&2
         exit 1
       fi
-      if [[ "$2" == ,* || "$2" == *, || "$2" == *,,* ]]; then
-        print_error "--ticket contiene un elemento vacío en '$2'." >&2
-        exit 1
-      fi
-      IFS=',' read -r -a _ticket_parts <<<"$2"
-      for _tp in "${_ticket_parts[@]}"; do
-        if [[ -z "$_tp" ]]; then
-          print_error "--ticket contiene un elemento vacío en '$2'." >&2
-          exit 1
-        fi
-        ticket_filters+=("$_tp")
-      done
+      trio_parse_ticket_arg "$2" || exit 1
       shift 2
       ;;
     --snapshot)
@@ -170,7 +159,7 @@ diff_snapshots() {
             ($p == null)
             or ($c.estado != $p.estado)
             or ($c.paso != $p.paso)
-            or (($pr != "") and ($cr != $pr) and is_actionable_real($cr))
+            or (($cr != $pr) and is_actionable_real($cr))
             or (($c.pm_herdr_status != $p.pm_herdr_status) and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
           else
             if $p == null then
@@ -179,7 +168,7 @@ diff_snapshots() {
               or ($c.estado == "en-curso" and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
             else
               (($c.estado != $p.estado) and ($c.estado == "hecho" or $c.estado == "needs-roberto" or $c.estado == "blocked"))
-              or (($pr != "") and ($cr != $pr) and is_actionable_real($cr))
+              or (($cr != $pr) and is_actionable_real($cr))
               or ($c.estado == "en-curso" and ($c.pm_herdr_status != $p.pm_herdr_status) and ($c.pm_herdr_status == "blocked" or $c.pm_herdr_status == "unknown"))
             end
           end
@@ -190,7 +179,7 @@ diff_snapshots() {
           tipo: (
             if $p == null then "nuevo"
             elif $c.estado != $p.estado then "estado"
-            elif ($pr != "") and ($cr != $pr) and is_actionable_real($cr) then "estado_real"
+            elif ($cr != $pr) and is_actionable_real($cr) then "estado_real"
             elif $c.paso != $p.paso then "paso"
             else "pm_herdr_status"
             end
@@ -328,17 +317,29 @@ enrich_and_emit() {
   done
 }
 
+emit_confirmed_events() {
+  local prev_json="$1"
+  local curr_json="$2"
+  local events_json="$3"
+  local mode_verbose="${4:-$verbose}"
+  local save_snap="${5:-1}"
+
+  confirm_events_with_gh "$prev_json" "$curr_json" "$events_json" "$mode_verbose"
+  curr_snapshot="$confirmed_snapshot"
+  events="$confirmed_events"
+  if [[ "$save_snap" -eq 1 ]]; then
+    write_snapshot "$curr_snapshot"
+  fi
+  enrich_and_emit "$events"
+}
+
 curr_snapshot="$(collect_snapshot)"
 
 if [[ -n "$snapshot_file" && -f "$snapshot_file" ]]; then
   if prev_snapshot="$(jq -e '.' "$snapshot_file" 2>/dev/null)"; then
     events="$(diff_snapshots "$prev_snapshot" "$curr_snapshot")"
     if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
-      confirm_events_with_gh "$prev_snapshot" "$curr_snapshot" "$events"
-      curr_snapshot="$confirmed_snapshot"
-      events="$confirmed_events"
-      write_snapshot "$curr_snapshot"
-      enrich_and_emit "$events"
+      emit_confirmed_events "$prev_snapshot" "$curr_snapshot" "$events" "$verbose" 1
       exit 0
     fi
   else
@@ -347,10 +348,7 @@ if [[ -n "$snapshot_file" && -f "$snapshot_file" ]]; then
 elif [[ -z "$snapshot_file" && ${#ticket_filters[@]} -gt 0 ]]; then
   events="$(diff_snapshots "{}" "$curr_snapshot" 0)"
   if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
-    confirm_events_with_gh "{}" "$curr_snapshot" "$events" 0
-    curr_snapshot="$confirmed_snapshot"
-    events="$confirmed_events"
-    enrich_and_emit "$events"
+    emit_confirmed_events "{}" "$curr_snapshot" "$events" 0 0
     exit 0
   fi
 fi
@@ -387,11 +385,7 @@ while true; do
   curr_snapshot="$(collect_snapshot)"
   events="$(diff_snapshots "$baseline" "$curr_snapshot")"
   if [[ "$(jq 'length' <<<"$events")" -gt 0 ]]; then
-    confirm_events_with_gh "$baseline" "$curr_snapshot" "$events"
-    curr_snapshot="$confirmed_snapshot"
-    events="$confirmed_events"
-    write_snapshot "$curr_snapshot"
-    enrich_and_emit "$events"
+    emit_confirmed_events "$baseline" "$curr_snapshot" "$events" "$verbose" 1
     exit 0
   fi
   if [[ "$curr_snapshot" != "$baseline" ]]; then
