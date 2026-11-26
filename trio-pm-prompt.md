@@ -21,10 +21,10 @@ pj-trio ya dejó configurada la identidad (git config del repo). No ejecutes `gi
 
 ## Flujo
 1. Leé el ticket con `gh issue view {{TICKET}} -R {{ISSUE_REPO}} --comments` y escribí {{TRIO_DIR}}/plan.md. Commit + push del meta-repo.
-2. Worktree NUEVO para este ticket, siempre, con ravn-git-bare-clone (ADR 0019 de pj-template); nunca `git worktree add` a mano ni uno viejo aunque exista:
-   `{{WT_PREP}} && git-create-worktree -r {{WT_RAIZ}} -B '{{BASE_REF}}' -b issue/{{TICKET}}-<slug> -p '' {{TICKET}}-<slug>`
-   Queda en {{WT_RAIZ}}/{{TICKET}}-<slug>, en la rama issue/{{TICKET}}-<slug> (el bare vive en {{BARE_HOME}}). El clon {{MIEMBRO_DIR}} es para leer: nadie trabaja en él.
-   Base: {{BASE_REF}}; el PR va contra {{BASE_PR}}. (Un sub-issue sale de la rama de su spec, que pj-trio recibe con --base; un trivial, de origin/HEAD.)
+2. Worktree NUEVO para este ticket, siempre, con ravn-wt (ADR 0027 de pj-template); nunca `git worktree add` a mano ni uno viejo aunque exista:
+   `{{WT_PREP}} && ravn-wt create -r {{WT_RAIZ}} -B '{{BASE_REF}}' -b issue/{{TICKET}}-<slug> -p '' issue/{{TICKET}}-<slug>`
+   Queda en {{WT_RAIZ}}/issue/{{TICKET}}-<slug>, en la rama issue/{{TICKET}}-<slug> (el bare vive en {{BARE_HOME}}). El clon {{MIEMBRO_DIR}} es para leer: nadie trabaja en él.
+   Base remota obligatoria: {{BASE_REF}}; el PR va contra {{BASE_PR}}. (Un sub-issue sale de la rama de su spec, que pj-trio recibe con --base; un trivial, de origin/HEAD. Nunca de la rama local del worktree de lectura.)
    Si la rama ya existe, usá otro slug. Anotá la ruta del worktree y la base en plan.md.
 3. Mandale el trabajo a WK vos mismo:
    `herdr agent prompt {{AGENTE_WK}} "{{WK_RULE_PREFIX}}Sos WK del ticket #{{TICKET}}. Leé {{TRIO_DIR}}/plan.md, trabajá SOLO en el worktree <ruta>, abrí el PR contra {{BASE_PR}} con: gh pr create -R {{PR_REPO}}{{GH_PR_BASE}} (más título, body{{WK_ISSUE_REF}} y --draft según tus reglas), y escribí {{TRIO_DIR}}/wk.md con PR, head sha y pruebas.{{WK_MERGE}}"`

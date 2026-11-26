@@ -109,17 +109,17 @@ _fleet_resolver_worktree() {
   [[ -n "$t_num" ]] || return 0
   local -a bases=()
   if [[ -n "$r_name" ]]; then
-    bases=("$pj_dir/repos/$r_name" "${WORKTREES_HOME:-/z/repos}/$r_name")
+    bases=("$pj_dir/repos/$r_name" "${WORKTREES_HOME:-/z-home-repos/repos}/$r_name" "${WORKTREES_HOME:-/z/repos}/$r_name")
   else
     local sub
-    for sub in "$pj_dir/repos"/* "${WORKTREES_HOME:-/z/repos}"/*; do
+    for sub in "$pj_dir/repos"/* "${WORKTREES_HOME:-/z-home-repos/repos}"/* "${WORKTREES_HOME:-/z/repos}"/*; do
       [[ -d "$sub" ]] && bases+=("$sub")
     done
   fi
   local base d
   for base in "${bases[@]}"; do
     [[ -d "$base" ]] || continue
-    for d in "$base/${t_num}" "$base/${t_num}-"*; do
+    for d in "$base/${t_num}" "$base/${t_num}-"* "$base/issue/${t_num}" "$base/issue/${t_num}-"* "$base/specs/${t_num}" "$base/specs/${t_num}-"*; do
       [[ -d "$d" ]] || continue
       if git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
         printf '%s\n' "$d"

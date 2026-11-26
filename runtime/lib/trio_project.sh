@@ -3,14 +3,25 @@
 # Resolución del proyecto meta, del repo miembro y de los nombres de agente.
 # shellcheck disable=SC2034,SC2154 # Globals are shared by runtime/scripts/start before these functions run.
 
-# Raíces donde se buscan proyecto y miembros: los clones de try (/z-drive/tries),
-# los home repos HR-* (/z-home-repos/<HR-X>) y las raíces de worktrees de
-# ravn-git-bare-clone (/z/repos/<repo>). La primera es donde clona lo que falta.
+trio_central_root() {
+    if [[ -n "${RAVN_HOME_REPOS_ROOT:-}" ]]; then
+        printf '%s\n' "${RAVN_HOME_REPOS_ROOT%/}"
+    elif [[ -d "/z-home-repos" ]]; then
+        printf '%s\n' "/z-home-repos"
+    else
+        printf '%s\n' "${HOME}/z-home-repos"
+    fi
+}
+
+# Raíces donde se buscan proyecto y miembros: clones de try (/z-drive/tries),
+# home repos HR-* (<central_root>/<HR-X>) y worktrees de ravn-wt (<central_root>/repos/<repo>).
 # PJ_TRIO_ROOTS: lista separada por espacios; PJ_TRIO_ROOT se sigue aceptando.
 trio_raices() {
+    local central_root
+    central_root="$(trio_central_root)"
     local r
     # shellcheck disable=SC2086 # Lista separada por espacios a propósito.
-    for r in ${PJ_TRIO_ROOT:-} ${PJ_TRIO_ROOTS:-/z-drive/tries /z-home-repos /z/repos}; do
+    for r in ${PJ_TRIO_ROOT:-} ${PJ_TRIO_ROOTS:-/z-drive/tries "$central_root" "$central_root/repos" /z/repos}; do
         [[ -d "$r" ]] && printf '%s\n' "$r"
     done
 }
@@ -362,20 +373,15 @@ trio_nombres() {
 
     trio_dir="${project_dir}/.trio/${ticket_key}"
     miembro_dir="${repo_path:-$project_dir}"
-    # Worktrees con ravn-git-bare-clone (ADR 0019 de pj-template): bare en
-    # $BARE_HOME/<repo>.git y worktrees en $WORKTREES_HOME/<repo>/<ticket>-<slug>.
-    # En un Home Repo (.bares/ o repos/ en $project_dir), usamos esos directorios
-    # locales en vez de /z/bare y /z/repos.
+    # Worktrees con ravn-wt (ADR 0027 de pj-template): bare en
+    # $BARE_HOME/<repo>.git y worktrees en $WORKTREES_HOME/<repo>/issue/<ticket>-<slug>.
     miembro_slug="${repo_slug:-${project_slug:-}}"
     local nombre_wt="${miembro_slug#*/}"
     [[ -n "$nombre_wt" ]] || nombre_wt="$(trio_nombre_repo "$miembro_dir")"
-    if [[ -d "${project_dir}/.bares" || -d "${project_dir}/repos" ]]; then
-        BARE_HOME="${BARE_HOME:-${project_dir}/.bares}"
-        WORKTREES_HOME="${WORKTREES_HOME:-${project_dir}/repos}"
-    else
-        BARE_HOME="${BARE_HOME:-/z/bare}"
-        WORKTREES_HOME="${WORKTREES_HOME:-/z/repos}"
-    fi
+    local central_root
+    central_root="$(trio_central_root)"
+    BARE_HOME="${BARE_HOME:-${central_root}/.bare}"
+    WORKTREES_HOME="${WORKTREES_HOME:-${central_root}/repos}"
     bare_dir="${BARE_HOME}/${nombre_wt}.git"
     wt_raiz="${WORKTREES_HOME}/${nombre_wt}"
 }

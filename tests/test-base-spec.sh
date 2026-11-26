@@ -26,7 +26,7 @@ kickoff() { "$aqui/pj-trio" --print-kickoff "$tmp/pj-demo" 42 --repo "$tmp/miemb
 # Trivial: origin/HEAD, PR a la rama por defecto y gh pr create sin --base.
 k="$(kickoff)"
 grep -q '{{' <<<"$k" && fallo "quedan placeholders sin --base"
-grep -qE "git-create-worktree -r [^ ]+/miembro -B 'origin/HEAD' -b issue/42-<slug> -p '' 42-<slug>\`" <<<"$k" \
+grep -qE "ravn-wt create -r [^ ]+/miembro -B 'origin/HEAD' -b issue/42-<slug> -p '' issue/42-<slug>\`" <<<"$k" \
   || fallo "sin --base el worktree debería salir de 'origin/HEAD'"
 grep -q 'worktree add -b' <<<"$k" && fallo "queda git worktree add a mano"
 grep -q '^4\. (Trivial o PR final) Mandale la revisión a RV' <<<"$k" || fallo "un trivial pasa por RV"
@@ -39,7 +39,7 @@ for arg in "--base spec/12-login" "--base origin/spec/12-login" "--base=spec/12-
   # shellcheck disable=SC2086 # arg lleva opción y valor a propósito.
   k="$(kickoff $arg)"
   grep -q '{{' <<<"$k" && fallo "quedan placeholders con $arg"
-  grep -qE "git-create-worktree -r [^ ]+/miembro -B 'origin/spec/12-login' -b issue/42-<slug> -p '' 42-<slug>\`" <<<"$k" \
+  grep -qE "ravn-wt create -r [^ ]+/miembro -B 'origin/spec/12-login' -b issue/42-<slug> -p '' issue/42-<slug>\`" <<<"$k" \
     || fallo "con $arg el worktree debería salir de 'origin/spec/12-login'"
   grep -q 'Es un sub-issue: con CI verde y code-review limpio, mergeá vos tu PR a spec/12-login con gh pr merge <pr> -R [^ ]* --squash --delete-branch --match-head-commit <sha-verde>' <<<"$k" \
     || fallo "con $arg el WK debería mergear su sub-issue a la rama del spec"

@@ -54,12 +54,12 @@ grep -q '/implement-spec' <<<"$k_auto" || fallo "autodetect con etiqueta spec de
 # 3. Sin etiqueta 'spec' ni --spec: mantiene modo unitario normal
 k_unit="$(PATH="$tmp/bin:/usr/bin:/bin" "$aqui/pj-trio" --print-kickoff "$tmp/pj-demo" 42 --repo "$tmp/miembro")"
 grep -q '/implement-spec' <<<"$k_unit" && fallo "ticket unitario no debe activar modo spec"
-grep -q 'git-create-worktree' <<<"$k_unit" || fallo "ticket unitario debe mantener flujo de worktree único"
+grep -q 'ravn-wt create' <<<"$k_unit" || fallo "ticket unitario debe mantener flujo de worktree único"
 
 # 4. Compatibilidad con --spec + --base y rechazo de --spec --oneshot
 k_base="$(PATH="$tmp/bin:/usr/bin:/bin" "$aqui/pj-trio" --print-kickoff --spec "$tmp/pj-demo" 42 --repo "$tmp/miembro" --base 116-spec)"
 grep -q 'origin/116-spec' <<<"$k_base" || fallo "--spec con --base debe respetar la base explícita"
-grep -q '42-<slug>' <<<"$k_base" || fallo "--spec con --base no debe pisar la rama del spec 42-<slug>"
+grep -q 'specs/42-<slug>' <<<"$k_base" || fallo "--spec con --base debe usar la rama del spec specs/42-<slug>"
 grep -q -- "--base '116-spec'" <<<"$k_base" || fallo "--spec con --base debe apuntar el PR final a 116-spec"
 if "$aqui/pj-trio" --print-kickoff --spec --oneshot "$tmp/pj-demo" 42 --repo "$tmp/miembro" >/dev/null 2>&1; then
   fallo "no debería aceptar --spec y --oneshot juntos"
