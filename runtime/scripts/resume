@@ -206,17 +206,17 @@ resolver_worktree_resume() {
     fi
     local -a bases=()
     if [[ -n "${repo_name:-}" ]]; then
-        bases=("$project_dir/repos/$repo_name" "${WORKTREES_HOME:-/z/repos}/$repo_name")
+        bases=("$project_dir/repos/$repo_name" "${WORKTREES_HOME:-/z-home-repos/repos}/$repo_name" "${WORKTREES_HOME:-/z/repos}/$repo_name")
     else
         local sub
-        for sub in "$project_dir/repos"/* "${WORKTREES_HOME:-/z/repos}"/*; do
+        for sub in "$project_dir/repos"/* "${WORKTREES_HOME:-/z-home-repos/repos}"/* "${WORKTREES_HOME:-/z/repos}"/*; do
             [[ -d "$sub" ]] && bases+=("$sub")
         done
     fi
     local base d
     for base in "${bases[@]}"; do
         [[ -d "$base" ]] || continue
-        for d in "$base/${ticket}" "$base/${ticket}-"*; do
+        for d in "$base/${ticket}" "$base/${ticket}-"* "$base/issue/${ticket}" "$base/issue/${ticket}-"* "$base/specs/${ticket}" "$base/specs/${ticket}-"*; do
             [[ -d "$d" ]] || continue
             if git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
                 printf '%s\n' "$d"
